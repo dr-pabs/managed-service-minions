@@ -16,7 +16,8 @@
     "outDir": "./dist",
     "rootDir": ".",
     "paths": {
-      "framework-core": ["./packages/framework-core/src/index.ts"]
+      "framework-core": ["./packages/framework-core/src/index.ts"],
+      "mcp-toolshed": ["./extensions/mcp-toolshed/src/index.ts"]
     }
   },
   "include": ["packages/**/*.ts", "extensions/**/*.ts", "infra/**/*.ts", "test/**/*.ts"],
