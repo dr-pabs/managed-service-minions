@@ -75,6 +75,20 @@ mock_provider "azurerm" {
   }
 
   override_resource {
+    target = module.networking.azurerm_virtual_network.main
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
+    target = module.networking.azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test/subnets/snet-pe-vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
     target = module.keyvault.azurerm_key_vault.main
     values = {
       id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.KeyVault/vaults/kv-goosetest-test"
@@ -85,9 +99,9 @@ mock_provider "azurerm" {
   override_resource {
     target = module.storage.azurerm_storage_account.main
     values = {
-      id                   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
-      name                 = "stgoosetesttestabc123"
-      primary_access_key   = "bW9ja2FjY2Vzc2tleWZvcnRlc3Rpbmcx"
+      id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
+      name               = "stgoosetesttestabc123"
+      primary_access_key = "bW9ja2FjY2Vzc2tleWZvcnRlc3Rpbmcx"
     }
   }
 
@@ -137,6 +151,41 @@ mock_provider "azurerm" {
     values = {
       id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.App/managedEnvironments/cae-goosetest-test"
       log_analytics_workspace_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.OperationalInsights/workspaces/la-goosetest-test"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.keyvault
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_blob
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_table
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_file
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.service_bus
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
     }
   }
 }

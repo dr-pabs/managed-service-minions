@@ -48,6 +48,12 @@ This plan turns the design documents in this repository — `../delivery-specifi
   - [x] Disaster-recovery, production-handoff, and security-review runbooks added under `docs/runbooks/`.
   - [x] Performance and chaos test scaffolding added under `test/performance/` and `test/chaos/`.
   - [ ] Real-environment validation (staging performance/chaos runs), backup/restore drill, dependency/container scanning, and formal security sign-off remain for the production handoff gate.
+- [x] (2026-06-17) Gap 9 — model provider configuration:
+  - All hardcoded model names removed from `rules/models.yaml`. Each tier now has empty `deployment` and `provider` fields with full operator documentation. Tier names (`fast`, `reasoning`, `code_review`, `code_generation`, `security`) remain stable code abstractions.
+  - `infra/terraform/variables.tf` extended with `model_provider_keys` (sensitive `map(string)`, injects API keys verbatim as container secrets) and `model_provider_endpoints` (non-sensitive `map(string)`, injects base URL overrides as container env vars). Uses native provider env var names as keys (e.g., `ANTHROPIC_API_KEY`, `OLLAMA_HOST`).
+  - `infra/terraform/modules/ai_foundry/variables.tf` and `main.tf` updated: `format` field added to deployment objects (`"OpenAI"` for Azure OpenAI Service, `"Azure"` for AI Foundry catalog models such as Claude, Deepseek, Qwen, MiMo).
+  - `infra/terraform/main.tf` updated: `env_vars` and `secrets` now use `merge()` to inject `model_provider_endpoints` and `model_provider_keys` alongside the fixed platform secrets — no special naming conventions required.
+  - `infra/terraform/environments/dev/terraform.tfvars` rewritten as a clean operator template: deprecated gpt-4o-mini/gpt-4.1 entries removed, all fields replaced with commented examples showing structure for Azure OpenAI, AI Foundry catalog (Claude, Deepseek, Qwen), Ollama, and vLLM. Operators fill in current model names at deploy time; no model names are committed.
 - [x] (2026-06-17) Gap fixes — production blockers 4–6 resolved:
   - [x] Gap 4: Private endpoints and private DNS zones added to `infra/terraform/main.tf` for Key Vault (`vault`), Storage (`blob`, `table`, `file`), and Service Bus (`namespace`) — each with an `azurerm_private_dns_zone`, `azurerm_private_dns_zone_virtual_network_link`, and `azurerm_private_endpoint` with a `private_dns_zone_group`. All five services are now privately accessible from Container Apps and not publicly reachable. Terraform test `private_endpoints_secure_all_services` added.
   - [x] Gap 5: `infra/terraform/modules/storage/main.tf` extended with `azurerm_storage_share.sqlite_data` (5 GB quota). `container_apps` module extended with `azurerm_container_app_environment_storage.sqlite` and `volume`/`volume_mount` blocks in all five container apps mounting the share at `/data`. `SQLITE_PATH=/data/sessions.sqlite` wired into `env_vars` in root `main.tf`. Terraform test `sqlite_volume_is_mounted_in_all_apps` added.
@@ -68,7 +74,7 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 ### Terraform Platform Hardening
 
-1. Commit a default `ai_model_deployments` configuration for dev (e.g., GPT-4o mini) in `infra/terraform/environments/dev/terraform.tfvars`.
+1. ~~Commit a default `ai_model_deployments` configuration for dev~~ — Resolved 2026-06-17 (Gap 9): `terraform.tfvars` rewritten as operator template; no model names hardcoded.
 2. Add staging and prod environment directories under `infra/terraform/environments/`.
 3. Add geo-redundant storage for SQLite state (backup/restore runbook and policy are already documented).
 4. Add Log Analytics queries and/or Grafana dashboard definitions for minion status, tool-call audit, and cost.
@@ -165,6 +171,14 @@ The following infrastructure gaps were identified in the 2026-06-17 gap analysis
 
 - **Decision:** Serve the dashboard HTML UI as an inline constant in `dashboard.ts` rather than a static file served from disk.
   - **Rationale:** The dashboard server is a zero-dependency Node.js HTTP server (no Express, no static-file middleware). Inlining the HTML avoids working-directory assumptions in the container, keeps tests hermetic, and requires no change to the Dockerfile.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Never hardcode model names or versions anywhere in the codebase; tier names are stable, specific models are operator configuration.
+  - **Rationale:** Model names and version strings rotate rapidly across all providers (OpenAI, Anthropic, Deepseek, ZhipuAI, etc.). Hardcoding them creates immediate technical debt and misleads operators who have different model access. Tier names (`fast`, `reasoning`, `code_review`, `code_generation`, `security`) are semantically stable; the model behind each tier is chosen by the operator at deploy time via `rules/models.yaml` and `terraform.tfvars`.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Use native provider env var names as keys for `model_provider_keys` and `model_provider_endpoints`.
+  - **Rationale:** Provider SDKs look for specific env vars (e.g., `ANTHROPIC_API_KEY`, `OLLAMA_HOST`). Using those same names as map keys means the operator sees a single canonical location to set them, and the container picks them up with zero extra mapping or naming conventions.
   - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
 
 - **Decision:** Expand all container app secrets in the shared `secrets` map rather than building per-app secret maps.

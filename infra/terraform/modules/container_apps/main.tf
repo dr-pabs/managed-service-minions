@@ -65,9 +65,9 @@ resource "azurerm_container_app" "orchestrator" {
         }
       }
 
-      volume_mount {
-        name       = "sqlite-data"
-        mount_path = "/data"
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
       }
     }
 
@@ -147,9 +147,9 @@ resource "azurerm_container_app" "slack_bot" {
         }
       }
 
-      volume_mount {
-        name       = "sqlite-data"
-        mount_path = "/data"
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
       }
     }
   }
@@ -212,9 +212,9 @@ resource "azurerm_container_app" "toolshed" {
         }
       }
 
-      volume_mount {
-        name       = "sqlite-data"
-        mount_path = "/data"
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
       }
 
       liveness_probe {
@@ -291,9 +291,9 @@ resource "azurerm_container_app" "dashboard" {
         }
       }
 
-      volume_mount {
-        name       = "sqlite-data"
-        mount_path = "/data"
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
       }
 
       liveness_probe {
@@ -370,9 +370,9 @@ resource "azurerm_container_app" "teams_bot" {
         }
       }
 
-      volume_mount {
-        name       = "sqlite-data"
-        mount_path = "/data"
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
       }
     }
   }

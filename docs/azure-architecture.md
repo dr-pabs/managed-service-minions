@@ -422,29 +422,32 @@ AI Foundry Hub: foundry-goosefw-{env}
 ├── Network Isolation: private endpoint
 │
 └── AI Project: goosefw-orchestration
-    ├── Deployment: fast (GPT-4o-mini → replaceable)
-    │   ├── SKU: GlobalStandard (PayGo)
-    │   ├── Capacity: 50K TPM
+    │   (Model names are never hardcoded — operators configure current models
+    │    via rules/models.yaml and terraform.tfvars at deploy time.)
+    │
+    ├── Deployment: fast  (operator-configured; Azure OpenAI or catalog model)
+    │   ├── SKU: operator-configured (GlobalStandard PayGo or PTU)
+    │   ├── Capacity: operator-configured TPM
     │   └── Content Filter: DefaultV2
     │
-    ├── Deployment: reasoning (GPT-4.1 → replaceable)
-    │   ├── SKU: GlobalStandard (PayGo, optional PTU)
-    │   ├── Capacity: 200K TPM
+    ├── Deployment: reasoning  (operator-configured)
+    │   ├── SKU: operator-configured
+    │   ├── Capacity: operator-configured TPM
     │   └── Content Filter: DefaultV2
     │
-    ├── Deployment: code-review (Claude Sonnet 4.8 → replaceable)
-    │   ├── SKU: GlobalStandard (PayGo)
-    │   ├── Capacity: 100K TPM
+    ├── Deployment: code-review  (operator-configured; catalog models supported)
+    │   ├── SKU: operator-configured
+    │   ├── Capacity: operator-configured TPM
     │   └── Content Filter: DefaultV2
     │
-    ├── Deployment: code-gen (GPT-4.1 → replaceable)
-    │   ├── SKU: GlobalStandard (PayGo)
-    │   ├── Capacity: 100K TPM
+    ├── Deployment: code-gen  (operator-configured)
+    │   ├── SKU: operator-configured
+    │   ├── Capacity: operator-configured TPM
     │   └── Content Filter: DefaultV2
     │
-    └── Deployment: security (Claude Sonnet 4.8 → replaceable)
-        ├── SKU: GlobalStandard (PayGo)
-        ├── Capacity: 50K TPM
+    └── Deployment: security  (operator-configured; catalog models supported)
+        ├── SKU: operator-configured
+        ├── Capacity: operator-configured TPM
         └── Content Filter: DefaultV2
 ```
 
@@ -467,7 +470,7 @@ Content safety is enabled at the AI Foundry level — no code in Goose handles c
 flowchart LR
     available["New Model\nAvailable in\nFoundry Catalog"]
     deploy["Deploy as\n{name}-v2"]
-    update_config["Update\nprovider.yaml"]
+    update_config["Update\nrules/models.yaml\n+ terraform.tfvars"]
     pr_review["PR Review\n+ Merge"]
     deploy_config["CI/CD Deploys\nConfig Only"]
     monitor["Monitor 24hr\nError Rate + Latency"]
@@ -479,7 +482,7 @@ flowchart LR
     pr_review --> deploy_config
     deploy_config --> monitor
     monitor -->|"no regression"| cleanup
-    monitor -->|"regression ⚠️"| rollback["Rollback\nrevert provider.yaml"]
+    monitor -->|"regression ⚠️"| rollback["Rollback\nrevert models.yaml"]
     rollback --> pr_review
     
     style available fill:#d6eaf8,stroke:#7fb3d8,color:#1a1a1a
@@ -488,12 +491,14 @@ flowchart LR
     style rollback fill:#fadbd8,stroke:#e6a8a0,color:#1a1a1a
 ```
 
-1. New model version available in AI Foundry catalog
-2. Deploy new model to a new deployment (e.g., `fast-v2`)
-3. Update `provider.yaml` → point `fast` tier to `fast-v2`
-4. Deploy config change via CI/CD (no container rebuild needed if config is mounted)
+1. New model version available in AI Foundry catalog (or external provider)
+2. Deploy new model to a new AI Foundry deployment (e.g., `fast-v2`) — only needed for Azure-hosted models
+3. Update `rules/models.yaml` → set `deployment` for the tier to the new deployment name; update `infra/terraform/environments/<env>/terraform.tfvars` if using AI Foundry
+4. Deploy config change via CI/CD (no container rebuild required)
 5. Monitor error rate and latency for 24 hours
-6. Delete old deployment (`fast-v1`)
+6. Delete old deployment if Azure-hosted (`fast-v1`)
+
+**Model changes are a config deployment, not a code change.** No model names are hardcoded in the codebase — operators choose current models in `rules/models.yaml` and `terraform.tfvars` at deploy time.
 
 ---
 
