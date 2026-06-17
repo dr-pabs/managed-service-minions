@@ -153,6 +153,41 @@ mock_provider "azurerm" {
       log_analytics_workspace_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.OperationalInsights/workspaces/la-goosetest-test"
     }
   }
+
+  override_resource {
+    target = azurerm_private_dns_zone.keyvault
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_blob
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_table
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_file
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.service_bus
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
+    }
+  }
 }
 
 mock_provider "azapi" {
