@@ -122,7 +122,7 @@ function loadSessions() {
     }
     list.innerHTML = sessions.map(function(s) {
       var active = s.id === selectedSessionId ? ' active' : '';
-      return '<li class="session-item' + active + '" onclick="selectSession(\'' + escape(s.id) + '\',\'' + escape(s.correlationRoot) + '\')">' +
+      return '<li class="session-item' + active + '" onclick="selectSession(\\'' + escape(s.id) + '\\',\\'' + escape(s.correlationRoot) + '\\')">' +
         '<div class="session-id">' + escape(s.id.slice(0, 16)) + '&hellip;</div>' +
         '<div class="session-meta">' + escape(s.platform) + ' &bull; ' + escape(s.userId) + '</div>' +
         '</li>';
