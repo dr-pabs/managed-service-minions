@@ -71,6 +71,14 @@ module "keyvault" {
     {
       principal_id         = module.managed_identity.teams_bot_principal_id
       role_definition_name = "Key Vault Secrets User"
+    },
+    {
+      principal_id         = module.managed_identity.dashboard_principal_id
+      role_definition_name = "Key Vault Secrets User"
+    },
+    {
+      principal_id         = module.managed_identity.toolshed_principal_id
+      role_definition_name = "Key Vault Secrets User"
     }
   ]
 }
@@ -92,6 +100,22 @@ module "storage" {
     {
       principal_id         = module.managed_identity.orchestrator_principal_id
       role_definition_name = "Storage Blob Data Contributor"
+    },
+    {
+      principal_id         = module.managed_identity.toolshed_principal_id
+      role_definition_name = "Storage Table Data Contributor"
+    },
+    {
+      principal_id         = module.managed_identity.dashboard_principal_id
+      role_definition_name = "Storage Table Data Contributor"
+    },
+    {
+      principal_id         = module.managed_identity.slack_bot_principal_id
+      role_definition_name = "Storage Table Data Contributor"
+    },
+    {
+      principal_id         = module.managed_identity.teams_bot_principal_id
+      role_definition_name = "Storage Table Data Contributor"
     }
   ]
 }
@@ -140,6 +164,14 @@ module "ai_foundry" {
   role_assignments = [
     {
       principal_id         = module.managed_identity.orchestrator_principal_id
+      role_definition_name = "Cognitive Services OpenAI User"
+    },
+    {
+      principal_id         = module.managed_identity.toolshed_principal_id
+      role_definition_name = "Cognitive Services OpenAI User"
+    },
+    {
+      principal_id         = module.managed_identity.dashboard_principal_id
       role_definition_name = "Cognitive Services OpenAI User"
     }
   ]
@@ -194,11 +226,20 @@ module "container_apps" {
   env_vars = {
     KEY_VAULT_NAME      = module.keyvault.name
     AI_FOUNDRY_ENDPOINT = module.ai_foundry.project_endpoint
+    GOOSE_SERVE_URL     = var.goose_serve_url
   }
 
   secrets = {
     SERVICE_BUS_CONNECTION_STRING = module.service_bus.primary_connection_string
     STORAGE_CONNECTION_STRING     = module.storage.primary_connection_string
+    SLACK_BOT_TOKEN               = var.slack_bot_token
+    SLACK_SIGNING_SECRET          = var.slack_signing_secret
+    MICROSOFT_APP_ID              = var.microsoft_app_id
+    MICROSOFT_APP_PASSWORD        = var.microsoft_app_password
+    GITHUB_TOKEN                  = var.github_token
+    AZURE_DEVOPS_PAT              = var.azure_devops_pat
+    SERVICENOW_API_KEY            = var.servicenow_api_key
+    JIRA_API_TOKEN                = var.jira_api_token
   }
 }
 
