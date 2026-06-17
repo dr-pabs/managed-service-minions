@@ -92,6 +92,12 @@ agents:
   security-auditor:
     tier: security
     budget: 40000
+  code-writer:
+    tier: code_generation
+    budget: 50000
+  test-writer:
+    tier: code_generation
+    budget: 40000
 
 skills:
   intent-classification:
