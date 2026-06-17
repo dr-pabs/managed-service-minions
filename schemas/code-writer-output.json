@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "tests_passed": { "type": "boolean" },
+    "test_output": { "type": "string" },
+    "summary": { "type": "string" }
+  },
+  "required": ["files_changed", "tests_passed", "summary"]
+}
