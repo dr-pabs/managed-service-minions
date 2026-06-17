@@ -34,6 +34,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: orchestrator
+            dockerfile: extensions/orchestrator/Dockerfile
           - name: mcp-toolshed
             dockerfile: extensions/mcp-toolshed/Dockerfile
           - name: mcp-github

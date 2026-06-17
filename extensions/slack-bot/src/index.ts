@@ -1,6 +1,7 @@
 import { App } from '@slack/bolt';
 import { createSqliteStore } from 'mcp-toolshed';
-import { createSlackBot, createEchoRunner } from './slack-bot.js';
+import { createGooseRunner } from 'framework-core';
+import { createSlackBot } from './slack-bot.js';
 
 const config = {
   signingSecret: process.env.SLACK_SIGNING_SECRET ?? '',
@@ -14,7 +15,9 @@ const app = new App({
 });
 
 const store = createSqliteStore(process.env.SQLITE_PATH ?? ':memory:');
-const runner = createEchoRunner();
+const runner = createGooseRunner({
+  baseUrl: process.env.GOOSE_SERVE_URL ?? 'http://localhost:3284',
+});
 const bot = createSlackBot(app, store, runner, config);
 
 bot.start().catch((err) => {

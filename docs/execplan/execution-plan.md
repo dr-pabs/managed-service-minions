@@ -48,6 +48,10 @@ This plan turns the design documents in this repository — `../delivery-specifi
   - [x] Disaster-recovery, production-handoff, and security-review runbooks added under `docs/runbooks/`.
   - [x] Performance and chaos test scaffolding added under `test/performance/` and `test/chaos/`.
   - [ ] Real-environment validation (staging performance/chaos runs), backup/restore drill, dependency/container scanning, and formal security sign-off remain for the production handoff gate.
+- [x] (2026-06-17) Gap fixes — production blockers 1–3 resolved:
+  - [x] Gap 1: `createEchoRunner` replaced with `createGooseRunner` in both `extensions/slack-bot/src/index.ts` and `extensions/teams-bot/src/index.ts`. `GooseRunner` implemented in `packages/framework-core/src/goose-runner.ts`; POSTs to `GOOSE_SERVE_URL/reply` (default `http://localhost:3284`); injectable `fetch` for testing; 100% coverage across all branches and functions.
+  - [x] Gap 2: Terraform `variables.tf` extended with 9 new sensitive variables (`slack_bot_token`, `slack_signing_secret`, `microsoft_app_id`, `microsoft_app_password`, `github_token`, `azure_devops_pat`, `servicenow_api_key`, `jira_api_token`, `goose_serve_url`). `main.tf` expanded: secrets map now includes all 8 platform/integration tokens plus `GOOSE_SERVE_URL` env var; Key Vault Secrets User role added for `dashboard` and `toolshed` identities; Storage Table Data Contributor added for `toolshed`, `dashboard`, `slack_bot`, `teams_bot`; Cognitive Services OpenAI User added for `toolshed` and `dashboard`.
+  - [x] Gap 3: `extensions/orchestrator/Dockerfile` created — multi-stage build that installs Goose CLI binary, builds `mcp-toolshed`, copies the framework plugin, and runs `goose serve --port 3284 --with-extension node /app/toolshed/index.js`. Added `orchestrator` entry to `.github/workflows/container-build.yml` build matrix.
 
 ## Remaining Work
 
@@ -69,10 +73,19 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 1. Add interactive approval buttons/cards to Slack and Teams bot responses.
 2. Optionally serve a basic HTML/JS frontend from `extensions/agent-dashboard`.
+3. Add async/proactive messaging: bots currently wait synchronously for `runner.run()` to complete; Slack (3-second) and Teams timeouts will fire for long orchestrator runs. Wire a fire-and-acknowledge pattern with proactive message delivery when Goose responds.
 
 ### Runtime Governance and Approvals
 
 1. Integrate approval requests with Slack/Teams interactive messages and the dashboard UI.
+
+### Infrastructure Gaps (next priority)
+
+The following infrastructure gaps were identified in the 2026-06-17 gap analysis and must be addressed before production:
+
+4. **Private endpoints & DNS** — `infra/terraform/modules/networking/` defines subnets but has no `azurerm_private_endpoint`, `azurerm_private_dns_zone`, or DNS zone group resources. Storage, Key Vault, and Service Bus are publicly reachable.
+5. **SQLite volume mounts** — Container Apps have no `volume` blocks; SQLite defaults to `:memory:` if `SQLITE_PATH` is not set. All session/approval data is lost on container restart. Requires Azure File Share mount.
+6. **Dashboard frontend** — `extensions/agent-dashboard/` exposes JSON API endpoints but has no HTML/JS UI. Operators visiting the URL receive raw JSON.
 
 ### Integration, Acceptance, and Handoff
 
@@ -129,6 +142,18 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
   - Evidence: The `office-town-plugin` recipes live in `~/.agents/plugins/office-town/commands/`, but `goose recipe list` found none until `GOOSE_RECIPE_PATH` pointed at that directory. `goose run --recipe ~/.agents/plugins/office-town/commands/<recipe>.yaml` worked directly.
 
 ## Decision Log
+
+- **Decision:** Implement `GooseRunner` in `packages/framework-core` (shared) rather than duplicating it in each bot extension.
+  - **Rationale:** The `IngressRunner` interface is already defined in `framework-core`. Placing `GooseRunner` there keeps the coupling symmetrical — both bots depend on `framework-core` and get the runner for free. No code duplication.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Inject `fetch` as a config parameter rather than monkey-patching `globalThis.fetch` or using a DI container.
+  - **Rationale:** Node 20+ has native `fetch`; the default production path requires no extra dependency. Injection keeps tests pure: pass a `jest.fn()` rather than stubbing globals. The one test that exercises the global-fetch path assigns to `globalThis.fetch` temporarily and restores it in a `finally` block.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Expand all container app secrets in the shared `secrets` map rather than building per-app secret maps.
+  - **Rationale:** The current Terraform `container_apps` module accepts a single `secrets` map applied to all apps. Adding per-app maps would require significant module surgery. All containers getting all secrets is over-privileged but acceptable for v1; the Key Vault RBAC ensures only containers with the correct managed identity can actually read the underlying secret values.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
 
 - **Decision:** Deliver the framework as a Goose **plugin** plus **MCP extensions**, not as a monolithic TypeScript service.
   - **Rationale:** The live Goose CLI separates plugins (skills/agents/hooks) from extensions (MCP tool servers). The orchestrator is a skill/agent that instructs Goose to classify intent, build a DAG, and call `delegate`. The MCP toolshed, Slack bot, Teams bot, and dashboard backend are MCP extensions that expose tools to the agent. This matches Goose's native packaging model.
