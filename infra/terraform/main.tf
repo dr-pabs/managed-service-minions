@@ -227,25 +227,31 @@ module "container_apps" {
   sqlite_share_name           = module.storage.sqlite_share_name
   sqlite_storage_access_key   = module.storage.primary_access_key
 
-  env_vars = {
-    KEY_VAULT_NAME      = module.keyvault.name
-    AI_FOUNDRY_ENDPOINT = module.ai_foundry.project_endpoint
-    GOOSE_SERVE_URL     = var.goose_serve_url
-    SQLITE_PATH         = "/data/sessions.sqlite"
-  }
+  env_vars = merge(
+    {
+      KEY_VAULT_NAME      = module.keyvault.name
+      AI_FOUNDRY_ENDPOINT = module.ai_foundry.project_endpoint
+      GOOSE_SERVE_URL     = var.goose_serve_url
+      SQLITE_PATH         = "/data/sessions.sqlite"
+    },
+    var.model_provider_endpoints
+  )
 
-  secrets = {
-    SERVICE_BUS_CONNECTION_STRING = module.service_bus.primary_connection_string
-    STORAGE_CONNECTION_STRING     = module.storage.primary_connection_string
-    SLACK_BOT_TOKEN               = var.slack_bot_token
-    SLACK_SIGNING_SECRET          = var.slack_signing_secret
-    MICROSOFT_APP_ID              = var.microsoft_app_id
-    MICROSOFT_APP_PASSWORD        = var.microsoft_app_password
-    GITHUB_TOKEN                  = var.github_token
-    AZURE_DEVOPS_PAT              = var.azure_devops_pat
-    SERVICENOW_API_KEY            = var.servicenow_api_key
-    JIRA_API_TOKEN                = var.jira_api_token
-  }
+  secrets = merge(
+    {
+      SERVICE_BUS_CONNECTION_STRING = module.service_bus.primary_connection_string
+      STORAGE_CONNECTION_STRING     = module.storage.primary_connection_string
+      SLACK_BOT_TOKEN               = var.slack_bot_token
+      SLACK_SIGNING_SECRET          = var.slack_signing_secret
+      MICROSOFT_APP_ID              = var.microsoft_app_id
+      MICROSOFT_APP_PASSWORD        = var.microsoft_app_password
+      GITHUB_TOKEN                  = var.github_token
+      AZURE_DEVOPS_PAT              = var.azure_devops_pat
+      SERVICENOW_API_KEY            = var.servicenow_api_key
+      JIRA_API_TOKEN                = var.jira_api_token
+    },
+    var.model_provider_keys
+  )
 }
 
 module "grafana" {
