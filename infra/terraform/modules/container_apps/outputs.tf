@@ -22,3 +22,8 @@ output "toolshed_name" {
   description = "Name of the toolshed container app."
   value       = azurerm_container_app.toolshed.name
 }
+
+output "sqlite_storage_name" {
+  description = "Container Apps environment storage name for the SQLite File Share."
+  value       = azurerm_container_app_environment_storage.sqlite.name
+}

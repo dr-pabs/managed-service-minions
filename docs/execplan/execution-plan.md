@@ -48,6 +48,10 @@ This plan turns the design documents in this repository — `../delivery-specifi
   - [x] Disaster-recovery, production-handoff, and security-review runbooks added under `docs/runbooks/`.
   - [x] Performance and chaos test scaffolding added under `test/performance/` and `test/chaos/`.
   - [ ] Real-environment validation (staging performance/chaos runs), backup/restore drill, dependency/container scanning, and formal security sign-off remain for the production handoff gate.
+- [x] (2026-06-17) Gap fixes — production blockers 4–6 resolved:
+  - [x] Gap 4: Private endpoints and private DNS zones added to `infra/terraform/main.tf` for Key Vault (`vault`), Storage (`blob`, `table`, `file`), and Service Bus (`namespace`) — each with an `azurerm_private_dns_zone`, `azurerm_private_dns_zone_virtual_network_link`, and `azurerm_private_endpoint` with a `private_dns_zone_group`. All five services are now privately accessible from Container Apps and not publicly reachable. Terraform test `private_endpoints_secure_all_services` added.
+  - [x] Gap 5: `infra/terraform/modules/storage/main.tf` extended with `azurerm_storage_share.sqlite_data` (5 GB quota). `container_apps` module extended with `azurerm_container_app_environment_storage.sqlite` and `volume`/`volume_mount` blocks in all five container apps mounting the share at `/data`. `SQLITE_PATH=/data/sessions.sqlite` wired into `env_vars` in root `main.tf`. Terraform test `sqlite_volume_is_mounted_in_all_apps` added.
+  - [x] Gap 6: `extensions/agent-dashboard/src/dashboard.ts` extended with a `GET /` route that serves a self-contained HTML/JS dashboard UI (`DASHBOARD_HTML` constant). The UI shows live sessions, minion runs per session, pending approvals, and a correlation tree; auto-refreshes every 5 seconds. `htmlResponse` helper added. All three test suites updated; 100% TypeScript coverage maintained.
 - [x] (2026-06-17) Gap fixes — production blockers 1–3 resolved:
   - [x] Gap 1: `createEchoRunner` replaced with `createGooseRunner` in both `extensions/slack-bot/src/index.ts` and `extensions/teams-bot/src/index.ts`. `GooseRunner` implemented in `packages/framework-core/src/goose-runner.ts`; POSTs to `GOOSE_SERVE_URL/reply` (default `http://localhost:3284`); injectable `fetch` for testing; 100% coverage across all branches and functions.
   - [x] Gap 2: Terraform `variables.tf` extended with 9 new sensitive variables (`slack_bot_token`, `slack_signing_secret`, `microsoft_app_id`, `microsoft_app_password`, `github_token`, `azure_devops_pat`, `servicenow_api_key`, `jira_api_token`, `goose_serve_url`). `main.tf` expanded: secrets map now includes all 8 platform/integration tokens plus `GOOSE_SERVE_URL` env var; Key Vault Secrets User role added for `dashboard` and `toolshed` identities; Storage Table Data Contributor added for `toolshed`, `dashboard`, `slack_bot`, `teams_bot`; Cognitive Services OpenAI User added for `toolshed` and `dashboard`.
@@ -83,9 +87,9 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 The following infrastructure gaps were identified in the 2026-06-17 gap analysis and must be addressed before production:
 
-4. **Private endpoints & DNS** — `infra/terraform/modules/networking/` defines subnets but has no `azurerm_private_endpoint`, `azurerm_private_dns_zone`, or DNS zone group resources. Storage, Key Vault, and Service Bus are publicly reachable.
-5. **SQLite volume mounts** — Container Apps have no `volume` blocks; SQLite defaults to `:memory:` if `SQLITE_PATH` is not set. All session/approval data is lost on container restart. Requires Azure File Share mount.
-6. **Dashboard frontend** — `extensions/agent-dashboard/` exposes JSON API endpoints but has no HTML/JS UI. Operators visiting the URL receive raw JSON.
+4. ~~Private endpoints & DNS~~ — Resolved 2026-06-17; see Progress above.
+5. ~~SQLite volume mounts~~ — Resolved 2026-06-17; see Progress above.
+6. ~~Dashboard frontend~~ — Resolved 2026-06-17; see Progress above.
 
 ### Integration, Acceptance, and Handoff
 
@@ -149,6 +153,18 @@ The following infrastructure gaps were identified in the 2026-06-17 gap analysis
 
 - **Decision:** Inject `fetch` as a config parameter rather than monkey-patching `globalThis.fetch` or using a DI container.
   - **Rationale:** Node 20+ has native `fetch`; the default production path requires no extra dependency. Injection keeps tests pure: pass a `jest.fn()` rather than stubbing globals. The one test that exercises the global-fetch path assigns to `globalThis.fetch` temporarily and restores it in a `finally` block.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Place private endpoint and DNS zone resources in root `main.tf` rather than inside the `networking` module.
+  - **Rationale:** Private endpoints reference IDs from storage, keyvault, and service_bus modules. Putting them in `networking` would require passing those IDs as variables, creating cross-module coupling. Root resources can reference all module outputs directly; Terraform resolves the dependency graph automatically.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Mount a single Azure File Share at `/data` in all five container apps and use `SQLITE_PATH=/data/sessions.sqlite` for all.
+  - **Rationale:** All five apps (orchestrator, slack-bot, teams-bot, toolshed, dashboard) use SQLite for session state. Sharing one File Share simplifies provisioning, and using the same path avoids per-app environment variable variation. The share is 5 GB, which is sufficient for v1 session volumes.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Serve the dashboard HTML UI as an inline constant in `dashboard.ts` rather than a static file served from disk.
+  - **Rationale:** The dashboard server is a zero-dependency Node.js HTTP server (no Express, no static-file middleware). Inlining the HTML avoids working-directory assumptions in the container, keeps tests hermetic, and requires no change to the Dockerfile.
   - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
 
 - **Decision:** Expand all container app secrets in the shared `secrets` map rather than building per-app secret maps.

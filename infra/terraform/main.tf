@@ -223,10 +223,15 @@ module "container_apps" {
 
   log_analytics_workspace_id = module.observability.workspace_id
 
+  sqlite_storage_account_name = module.storage.account_name
+  sqlite_share_name           = module.storage.sqlite_share_name
+  sqlite_storage_access_key   = module.storage.primary_access_key
+
   env_vars = {
     KEY_VAULT_NAME      = module.keyvault.name
     AI_FOUNDRY_ENDPOINT = module.ai_foundry.project_endpoint
     GOOSE_SERVE_URL     = var.goose_serve_url
+    SQLITE_PATH         = "/data/sessions.sqlite"
   }
 
   secrets = {
@@ -252,4 +257,178 @@ module "grafana" {
   resource_group_name = module.resource_group.name
   location            = var.location
   tags                = local.common_tags
+}
+
+# ── Private Endpoints & DNS Zones ────────────────────────────────────────────
+# Each Azure PaaS service gets a private endpoint in the dedicated subnet so
+# Container Apps can reach them over private IPs, with no public exposure.
+
+resource "azurerm_private_dns_zone" "keyvault" {
+  name                = "privatelink.vaultcore.azure.net"
+  resource_group_name = module.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "keyvault" {
+  name                  = "kv-vnet-link-${local.base_name}"
+  resource_group_name   = module.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.keyvault.name
+  virtual_network_id    = module.networking.vnet_id
+  tags                  = local.common_tags
+}
+
+resource "azurerm_private_endpoint" "keyvault" {
+  name                = "pe-kv-${local.base_name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  subnet_id           = module.networking.private_endpoint_subnet_id
+  tags                = local.common_tags
+
+  private_service_connection {
+    name                           = "keyvault-connection"
+    private_connection_resource_id = module.keyvault.id
+    subresource_names              = ["vault"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "keyvault-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.keyvault.id]
+  }
+}
+
+resource "azurerm_private_dns_zone" "storage_blob" {
+  name                = "privatelink.blob.core.windows.net"
+  resource_group_name = module.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "storage_blob" {
+  name                  = "stblob-vnet-link-${local.base_name}"
+  resource_group_name   = module.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.storage_blob.name
+  virtual_network_id    = module.networking.vnet_id
+  tags                  = local.common_tags
+}
+
+resource "azurerm_private_endpoint" "storage_blob" {
+  name                = "pe-st-blob-${local.base_name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  subnet_id           = module.networking.private_endpoint_subnet_id
+  tags                = local.common_tags
+
+  private_service_connection {
+    name                           = "storage-blob-connection"
+    private_connection_resource_id = module.storage.account_id
+    subresource_names              = ["blob"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "storage-blob-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.storage_blob.id]
+  }
+}
+
+resource "azurerm_private_dns_zone" "storage_table" {
+  name                = "privatelink.table.core.windows.net"
+  resource_group_name = module.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "storage_table" {
+  name                  = "sttable-vnet-link-${local.base_name}"
+  resource_group_name   = module.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.storage_table.name
+  virtual_network_id    = module.networking.vnet_id
+  tags                  = local.common_tags
+}
+
+resource "azurerm_private_endpoint" "storage_table" {
+  name                = "pe-st-table-${local.base_name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  subnet_id           = module.networking.private_endpoint_subnet_id
+  tags                = local.common_tags
+
+  private_service_connection {
+    name                           = "storage-table-connection"
+    private_connection_resource_id = module.storage.account_id
+    subresource_names              = ["table"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "storage-table-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.storage_table.id]
+  }
+}
+
+resource "azurerm_private_dns_zone" "storage_file" {
+  name                = "privatelink.file.core.windows.net"
+  resource_group_name = module.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "storage_file" {
+  name                  = "stfile-vnet-link-${local.base_name}"
+  resource_group_name   = module.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.storage_file.name
+  virtual_network_id    = module.networking.vnet_id
+  tags                  = local.common_tags
+}
+
+resource "azurerm_private_endpoint" "storage_file" {
+  name                = "pe-st-file-${local.base_name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  subnet_id           = module.networking.private_endpoint_subnet_id
+  tags                = local.common_tags
+
+  private_service_connection {
+    name                           = "storage-file-connection"
+    private_connection_resource_id = module.storage.account_id
+    subresource_names              = ["file"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "storage-file-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.storage_file.id]
+  }
+}
+
+resource "azurerm_private_dns_zone" "service_bus" {
+  name                = "privatelink.servicebus.windows.net"
+  resource_group_name = module.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "service_bus" {
+  name                  = "sb-vnet-link-${local.base_name}"
+  resource_group_name   = module.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.service_bus.name
+  virtual_network_id    = module.networking.vnet_id
+  tags                  = local.common_tags
+}
+
+resource "azurerm_private_endpoint" "service_bus" {
+  name                = "pe-sb-${local.base_name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  subnet_id           = module.networking.private_endpoint_subnet_id
+  tags                = local.common_tags
+
+  private_service_connection {
+    name                           = "servicebus-connection"
+    private_connection_resource_id = module.service_bus.namespace_id
+    subresource_names              = ["namespace"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "servicebus-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.service_bus.id]
+  }
 }

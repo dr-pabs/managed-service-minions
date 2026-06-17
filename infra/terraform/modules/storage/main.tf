@@ -32,6 +32,12 @@ resource "azurerm_storage_container" "sqlite_backups" {
   container_access_type = "private"
 }
 
+resource "azurerm_storage_share" "sqlite_data" {
+  name                 = "sqlite-data"
+  storage_account_name = azurerm_storage_account.main.name
+  quota                = var.sqlite_share_quota_gb
+}
+
 resource "azurerm_role_assignment" "main" {
   for_each = { for idx, ra in var.role_assignments : idx => ra }
 
