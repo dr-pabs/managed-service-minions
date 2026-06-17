@@ -74,19 +74,6 @@ function createContext(activity: Partial<Activity>): TurnContext {
   } as unknown as TurnContext;
 }
 
-// Helper: get the mock context that was passed inside the Nth continueConversation call.
-function getProactiveCtx(app: MockApplication, callIndex = 0): TurnContext {
-  const calls = (app.adapter.continueConversation as jest.Mock).mock.calls;
-  // The mock implementation already called the logic and the proactive ctx is
-  // captured inside it — we re-invoke to get the same mock context reference.
-  // Instead, use the captured arg directly: the mock stores calls with (ref, logic).
-  // We just need the sendActivity that was used — easier to read from the call itself.
-  // The mock creates a proactiveCtx and passes it to logic; we need that same ctx.
-  // Since the mock implementation runs logic synchronously with a fresh ctx each call,
-  // we reconstruct by re-calling — but to avoid side effects, return via closure below.
-  return calls[callIndex]?.[1] as unknown as TurnContext;
-}
-
 describe('createTeamsBot', () => {
   let app: MockApplication;
   let store: SessionStore;

@@ -85,9 +85,9 @@ mock_provider "azurerm" {
   override_resource {
     target = module.storage.azurerm_storage_account.main
     values = {
-      id                   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
-      name                 = "stgoosetesttestabc123"
-      primary_access_key   = "bW9ja2FjY2Vzc2tleWZvcnRlc3Rpbmcx"
+      id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
+      name               = "stgoosetesttestabc123"
+      primary_access_key = "bW9ja2FjY2Vzc2tleWZvcnRlc3Rpbmcx"
     }
   }
 
