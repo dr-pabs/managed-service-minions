@@ -48,6 +48,10 @@ This plan turns the design documents in this repository — `../delivery-specifi
   - [x] Disaster-recovery, production-handoff, and security-review runbooks added under `docs/runbooks/`.
   - [x] Performance and chaos test scaffolding added under `test/performance/` and `test/chaos/`.
   - [ ] Real-environment validation (staging performance/chaos runs), backup/restore drill, dependency/container scanning, and formal security sign-off remain for the production handoff gate.
+- [x] (2026-06-17) Gap 7 — async/proactive messaging:
+  - **Slack** (`extensions/slack-bot/src/slack-bot.ts`): replaced the synchronous `handleSlackMessage` pattern with a fire-and-acknowledge pattern. Both `app_mention` and `message` (DM) handlers now: (1) `await say(ack)` immediately so Bolt returns HTTP 200 before the 3-second Slack window closes, suppressing duplicate retries; (2) `void postSlackResponse(...)` fires the Goose run in the background; (3) the result is posted proactively via `client.chat.postMessage({ channel, thread_ts, text, blocks? })`. `SlackPoster` interface (duck-typed `WebClient` subset) added for testability.
+  - **Teams** (`extensions/teams-bot/src/teams-bot.ts`): replaced the synchronous `handleTeamsMessage` pattern. The message handler now: (1) captures the conversation reference via `TurnContext.getConversationReference(activity)` before the turn ends; (2) `await context.sendActivity(ack)` sends the immediate acknowledgement; (3) `void postTeamsResponse(...)` fires the Goose run in the background; (4) the result is delivered proactively via `adapter.continueConversation(conversationRef, callback)`. `TurnContext` imported as a value (not a type-only import) to access the static method.
+  - Both extensions maintain 100% line/branch/function/statement coverage. New test cases cover: ack-before-run, proactive result, proactive error, empty-array blocks, missing channel field.
 - [x] (2026-06-17) Gap fixes — production blockers 4–6 resolved:
   - [x] Gap 4: Private endpoints and private DNS zones added to `infra/terraform/main.tf` for Key Vault (`vault`), Storage (`blob`, `table`, `file`), and Service Bus (`namespace`) — each with an `azurerm_private_dns_zone`, `azurerm_private_dns_zone_virtual_network_link`, and `azurerm_private_endpoint` with a `private_dns_zone_group`. All five services are now privately accessible from Container Apps and not publicly reachable. Terraform test `private_endpoints_secure_all_services` added.
   - [x] Gap 5: `infra/terraform/modules/storage/main.tf` extended with `azurerm_storage_share.sqlite_data` (5 GB quota). `container_apps` module extended with `azurerm_container_app_environment_storage.sqlite` and `volume`/`volume_mount` blocks in all five container apps mounting the share at `/data`. `SQLITE_PATH=/data/sessions.sqlite` wired into `env_vars` in root `main.tf`. Terraform test `sqlite_volume_is_mounted_in_all_apps` added.
@@ -77,7 +81,7 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 1. Add interactive approval buttons/cards to Slack and Teams bot responses.
 2. Optionally serve a basic HTML/JS frontend from `extensions/agent-dashboard`.
-3. Add async/proactive messaging: bots currently wait synchronously for `runner.run()` to complete; Slack (3-second) and Teams timeouts will fire for long orchestrator runs. Wire a fire-and-acknowledge pattern with proactive message delivery when Goose responds.
+3. ~~Add async/proactive messaging~~ — Resolved 2026-06-17 (Gap 7): fire-and-acknowledge pattern implemented in both Slack and Teams bots; proactive delivery via `client.chat.postMessage` and `adapter.continueConversation` respectively.
 
 ### Runtime Governance and Approvals
 

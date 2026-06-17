@@ -15,6 +15,20 @@ export interface SlackBotConfig {
   port?: number;
 }
 
+// Duck-typed subset of WebClient needed for proactive posting.
+// The real type is WebClient from @slack/web-api — Bolt provides it as `client`
+// in all event/message handler args.
+export interface SlackPoster {
+  chat: {
+    postMessage(args: {
+      channel: string;
+      thread_ts?: string;
+      text: string;
+      blocks?: unknown[];
+    }): Promise<unknown>;
+  };
+}
+
 /**
  * A minimal runner that echoes the request back. Useful for local smoke tests
  * until the real Minions orchestrator is wired in.
@@ -58,7 +72,7 @@ export function createSlackBot(
   runner: IngressRunner,
   config: SlackBotConfig
 ): { start: () => Promise<void>; stop: () => Promise<unknown> } {
-  app.event('app_mention', async ({ event, say }) => {
+  app.event('app_mention', async ({ event, say, client }) => {
     const mention = event as AppMentionEvent;
     const text = cleanSlackText(mention.text);
 
@@ -67,10 +81,24 @@ export function createSlackBot(
       return;
     }
 
-    await handleSlackMessage(toSlackRequest(mention, text), store, runner, say);
+    // Acknowledge immediately. Bolt sends HTTP 200 when this handler returns, so
+    // Slack gets its ack before the 3-second window closes and suppresses retries.
+    await say(':hourglass_flowing_sand: Working on it…');
+
+    const channel = mention.channel ?? '';
+    const thread_ts = mention.thread_ts ?? mention.ts;
+
+    void postSlackResponse(
+      toSlackRequest(mention, text),
+      store,
+      runner,
+      client as unknown as SlackPoster,
+      channel,
+      thread_ts
+    );
   });
 
-  app.message(async ({ message, say }) => {
+  app.message(async ({ message, say, client }) => {
     const msg = message as GenericMessageEvent;
     if (!isDirectMessage(msg)) {
       return;
@@ -81,7 +109,19 @@ export function createSlackBot(
       return;
     }
 
-    await handleSlackMessage(toSlackRequest(msg, text), store, runner, say);
+    await say(':hourglass_flowing_sand: Working on it…');
+
+    const channel = msg.channel ?? '';
+    const thread_ts = msg.ts;
+
+    void postSlackResponse(
+      toSlackRequest(msg, text),
+      store,
+      runner,
+      client as unknown as SlackPoster,
+      channel,
+      thread_ts
+    );
   });
 
   return {
@@ -92,15 +132,17 @@ export function createSlackBot(
   };
 }
 
-async function handleSlackMessage(
+async function postSlackResponse(
   request: IngressRequest,
   store: SessionStore,
   runner: IngressRunner,
-  say: (message: string | { text: string; blocks?: unknown[] }) => Promise<unknown>
+  poster: SlackPoster,
+  channel: string,
+  thread_ts: string
 ): Promise<void> {
   try {
     const response = await handleIngressMessage(request, store, runner);
-    await sendSlackResponse(say, response);
+    await sendSlackResponseProactive(poster, channel, thread_ts, response);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     const summary = formatError({
@@ -111,17 +153,24 @@ async function handleSlackMessage(
       action: 'Try again or contact the platform team with the session id.',
       correlationId: 'unknown',
     });
-    await say(summary);
+    await poster.chat.postMessage({ channel, thread_ts, text: summary });
   }
 }
 
-async function sendSlackResponse(
-  say: (message: string | { text: string; blocks?: unknown[] }) => Promise<unknown>,
+async function sendSlackResponseProactive(
+  poster: SlackPoster,
+  channel: string,
+  thread_ts: string,
   response: IngressResponse
 ): Promise<void> {
   if (response.blocks && response.blocks.length > 0) {
-    await say({ text: response.text, blocks: response.blocks });
+    await poster.chat.postMessage({
+      channel,
+      thread_ts,
+      text: response.text,
+      blocks: response.blocks,
+    });
   } else {
-    await say(response.text);
+    await poster.chat.postMessage({ channel, thread_ts, text: response.text });
   }
 }
