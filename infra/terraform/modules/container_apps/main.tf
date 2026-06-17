@@ -65,7 +65,7 @@ resource "azurerm_container_app" "orchestrator" {
         }
       }
 
-      volume_mount {
+      volume_mounts {
         name       = "sqlite-data"
         mount_path = "/data"
       }
@@ -147,7 +147,7 @@ resource "azurerm_container_app" "slack_bot" {
         }
       }
 
-      volume_mount {
+      volume_mounts {
         name       = "sqlite-data"
         mount_path = "/data"
       }
@@ -212,7 +212,7 @@ resource "azurerm_container_app" "toolshed" {
         }
       }
 
-      volume_mount {
+      volume_mounts {
         name       = "sqlite-data"
         mount_path = "/data"
       }
@@ -291,7 +291,7 @@ resource "azurerm_container_app" "dashboard" {
         }
       }
 
-      volume_mount {
+      volume_mounts {
         name       = "sqlite-data"
         mount_path = "/data"
       }
@@ -370,7 +370,7 @@ resource "azurerm_container_app" "teams_bot" {
         }
       }
 
-      volume_mount {
+      volume_mounts {
         name       = "sqlite-data"
         mount_path = "/data"
       }
