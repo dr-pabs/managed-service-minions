@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { App as BoltApp } from '@slack/bolt';
-import { createSlackBot, createEchoRunner } from '../src/slack-bot.js';
+import { createSlackBot, createEchoRunner, type SlackPoster } from '../src/slack-bot.js';
 import type { IngressRunner, SessionStore } from 'framework-core';
 
 class MockApp {
@@ -39,17 +39,32 @@ function makeStore(): SessionStore {
   };
 }
 
+function makeClient(): SlackPoster {
+  return {
+    chat: {
+      postMessage: jest.fn().mockResolvedValue({}),
+    },
+  };
+}
+
+// Drain the microtask / I/O queue so fire-and-forget background work completes.
+function flushAsync(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe('createSlackBot', () => {
   let app: MockApp;
   let store: SessionStore;
   let runner: IngressRunner;
   let say: jest.Mock<() => Promise<void>>;
+  let client: SlackPoster;
 
   beforeEach(() => {
     app = new MockApp();
     store = makeStore();
     runner = { run: jest.fn().mockResolvedValue({ text: 'Done' }) };
     say = jest.fn().mockResolvedValue(undefined);
+    client = makeClient();
   });
 
   it('registers app_mention and message handlers', () => {
@@ -62,7 +77,7 @@ describe('createSlackBot', () => {
     expect(app.message).toHaveBeenCalledWith(expect.any(Function));
   });
 
-  it('handles app_mention events and replies with runner text', async () => {
+  it('acknowledges app_mention immediately then posts the runner reply proactively', async () => {
     createSlackBot(app as unknown as BoltApp, store, runner, {
       signingSecret: 'secret',
       token: 'token',
@@ -78,8 +93,11 @@ describe('createSlackBot', () => {
         thread_ts: '123.456',
       },
       say,
+      client,
     });
 
+    // Ack sent synchronously before Goose runs
+    expect(say).toHaveBeenCalledWith(':hourglass_flowing_sand: Working on it…');
     expect(runner.run).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: 'slack',
@@ -90,7 +108,13 @@ describe('createSlackBot', () => {
         threadId: '123.456',
       })
     );
-    expect(say).toHaveBeenCalledWith('Done');
+
+    // Wait for background work to complete
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'C1', text: 'Done' })
+    );
   });
 
   it('greets the user when the mention contains only the bot mention', async () => {
@@ -108,13 +132,41 @@ describe('createSlackBot', () => {
         user: 'U42',
       },
       say,
+      client,
     });
 
     expect(say).toHaveBeenCalledWith('Hi! What can I help you with?');
     expect(runner.run).not.toHaveBeenCalled();
   });
 
-  it('handles direct messages', async () => {
+  it('falls back to event.ts when thread_ts is absent', async () => {
+    createSlackBot(app as unknown as BoltApp, store, runner, {
+      signingSecret: 'secret',
+      token: 'token',
+    });
+
+    await app.eventHandlers['app_mention']({
+      event: {
+        type: 'app_mention',
+        text: '<@U123> help',
+        team: 'T1',
+        channel: 'C1',
+        user: 'U42',
+        ts: 'ts-root',
+        // no thread_ts
+      },
+      say,
+      client,
+    });
+
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread_ts: 'ts-root' })
+    );
+  });
+
+  it('handles direct messages — acks then posts proactively', async () => {
     createSlackBot(app as unknown as BoltApp, store, runner, {
       signingSecret: 'secret',
       token: 'token',
@@ -133,8 +185,10 @@ describe('createSlackBot', () => {
         event_ts: '1',
       },
       say,
+      client,
     });
 
+    expect(say).toHaveBeenCalledWith(':hourglass_flowing_sand: Working on it…');
     expect(runner.run).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: 'slack',
@@ -144,7 +198,41 @@ describe('createSlackBot', () => {
         text: 'hello minions',
       })
     );
-    expect(say).toHaveBeenCalledWith('Done');
+
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'D1', text: 'Done' })
+    );
+  });
+
+  it('uses empty string for channel when DM event has no channel field', async () => {
+    createSlackBot(app as unknown as BoltApp, store, runner, {
+      signingSecret: 'secret',
+      token: 'token',
+    });
+
+    await app.messageHandlers[0]({
+      message: {
+        type: 'message',
+        subtype: undefined,
+        channel_type: 'im',
+        text: 'hello',
+        team: 'T1',
+        // no channel
+        user: 'U42',
+        ts: '2',
+        event_ts: '2',
+      },
+      say,
+      client,
+    });
+
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: '' })
+    );
   });
 
   it('ignores non-direct message channel events', async () => {
@@ -166,6 +254,7 @@ describe('createSlackBot', () => {
         event_ts: '1',
       },
       say,
+      client,
     });
 
     expect(runner.run).not.toHaveBeenCalled();
@@ -191,13 +280,45 @@ describe('createSlackBot', () => {
         event_ts: '1',
       },
       say,
+      client,
     });
 
     expect(runner.run).not.toHaveBeenCalled();
     expect(say).not.toHaveBeenCalled();
   });
 
-  it('sends blocks when the runner returns them', async () => {
+  it('omits blocks from the proactive post when blocks array is empty', async () => {
+    runner = { run: jest.fn().mockResolvedValue({ text: 'Summary', blocks: [] }) };
+
+    createSlackBot(app as unknown as BoltApp, store, runner, {
+      signingSecret: 'secret',
+      token: 'token',
+    });
+
+    await app.eventHandlers['app_mention']({
+      event: {
+        type: 'app_mention',
+        text: '<@U123> summarize',
+        team: 'T1',
+        channel: 'C1',
+        user: 'U42',
+        ts: '1',
+      },
+      say,
+      client,
+    });
+
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({ blocks: expect.anything() })
+    );
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Summary' })
+    );
+  });
+
+  it('includes blocks in the proactive post when the runner returns them', async () => {
     runner = {
       run: jest.fn().mockResolvedValue({
         text: 'Summary',
@@ -217,17 +338,23 @@ describe('createSlackBot', () => {
         team: 'T1',
         channel: 'C1',
         user: 'U42',
+        ts: '1',
       },
       say,
+      client,
     });
 
-    expect(say).toHaveBeenCalledWith({
-      text: 'Summary',
-      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Summary' } }],
-    });
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Summary',
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Summary' } }],
+      })
+    );
   });
 
-  it('surfaces runner errors as user-facing messages', async () => {
+  it('posts runner errors proactively as user-facing messages', async () => {
     runner = { run: jest.fn().mockRejectedValue(new Error('boom')) };
 
     createSlackBot(app as unknown as BoltApp, store, runner, {
@@ -242,14 +369,23 @@ describe('createSlackBot', () => {
         team: 'T1',
         channel: 'C1',
         user: 'U42',
+        ts: '1',
       },
       say,
+      client,
     });
 
-    expect(say).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    // Ack still sent immediately
+    expect(say).toHaveBeenCalledWith(':hourglass_flowing_sand: Working on it…');
+
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('boom') as string })
+    );
   });
 
-  it('surfaces non-Error failures as user-facing messages', async () => {
+  it('posts non-Error failures proactively as user-facing messages', async () => {
     runner = { run: jest.fn().mockRejectedValue('string failure') };
 
     createSlackBot(app as unknown as BoltApp, store, runner, {
@@ -264,11 +400,17 @@ describe('createSlackBot', () => {
         team: 'T1',
         channel: 'C1',
         user: 'U42',
+        ts: '1',
       },
       say,
+      client,
     });
 
-    expect(say).toHaveBeenCalledWith(expect.stringContaining('string failure'));
+    await flushAsync();
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('string failure') as string })
+    );
   });
 
   it('fills in defaults when mention metadata is missing', async () => {
@@ -283,6 +425,7 @@ describe('createSlackBot', () => {
         text: '<@U123> help',
       },
       say,
+      client,
     });
 
     expect(runner.run).toHaveBeenCalledWith(
