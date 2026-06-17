@@ -75,6 +75,20 @@ mock_provider "azurerm" {
   }
 
   override_resource {
+    target = module.networking.azurerm_virtual_network.main
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
+    target = module.networking.azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test/subnets/snet-pe-vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
     target = module.keyvault.azurerm_key_vault.main
     values = {
       id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.KeyVault/vaults/kv-goosetest-test"
