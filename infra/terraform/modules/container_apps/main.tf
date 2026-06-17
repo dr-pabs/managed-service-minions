@@ -13,6 +13,15 @@ locals {
   secret_names = { for key in local.secret_keys : key => replace(lower(key), "/[^a-z0-9-]/", "-") }
 }
 
+resource "azurerm_container_app_environment_storage" "sqlite" {
+  name                         = "sqlite-data"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  account_name                 = var.sqlite_storage_account_name
+  share_name                   = var.sqlite_share_name
+  access_key                   = var.sqlite_storage_access_key
+  access_mode                  = "ReadWrite"
+}
+
 resource "azurerm_container_app" "orchestrator" {
   name                         = var.orchestrator.name
   resource_group_name          = var.resource_group_name
@@ -27,6 +36,12 @@ resource "azurerm_container_app" "orchestrator" {
   template {
     min_replicas = var.orchestrator.min_replicas
     max_replicas = var.orchestrator.max_replicas
+
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
 
     container {
       name   = "orchestrator"
@@ -48,6 +63,11 @@ resource "azurerm_container_app" "orchestrator" {
           name        = env.value
           secret_name = local.secret_names[env.value]
         }
+      }
+
+      volume_mount {
+        name       = "sqlite-data"
+        mount_path = "/data"
       }
     }
 
@@ -99,6 +119,12 @@ resource "azurerm_container_app" "slack_bot" {
     min_replicas = 1
     max_replicas = 1
 
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
+
     container {
       name   = "slack-bot"
       image  = var.slack_bot.image
@@ -119,6 +145,11 @@ resource "azurerm_container_app" "slack_bot" {
           name        = env.value
           secret_name = local.secret_names[env.value]
         }
+      }
+
+      volume_mount {
+        name       = "sqlite-data"
+        mount_path = "/data"
       }
     }
   }
@@ -153,6 +184,12 @@ resource "azurerm_container_app" "toolshed" {
     min_replicas = 1
     max_replicas = 3
 
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
+
     container {
       name   = "toolshed"
       image  = var.toolshed.image
@@ -173,6 +210,11 @@ resource "azurerm_container_app" "toolshed" {
           name        = env.value
           secret_name = local.secret_names[env.value]
         }
+      }
+
+      volume_mount {
+        name       = "sqlite-data"
+        mount_path = "/data"
       }
 
       liveness_probe {
@@ -221,6 +263,12 @@ resource "azurerm_container_app" "dashboard" {
     min_replicas = 1
     max_replicas = 3
 
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
+
     container {
       name   = "dashboard"
       image  = var.dashboard.image
@@ -241,6 +289,11 @@ resource "azurerm_container_app" "dashboard" {
           name        = env.value
           secret_name = local.secret_names[env.value]
         }
+      }
+
+      volume_mount {
+        name       = "sqlite-data"
+        mount_path = "/data"
       }
 
       liveness_probe {
@@ -289,6 +342,12 @@ resource "azurerm_container_app" "teams_bot" {
     min_replicas = 1
     max_replicas = 1
 
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
+
     container {
       name   = "teams-bot"
       image  = var.teams_bot.image
@@ -309,6 +368,11 @@ resource "azurerm_container_app" "teams_bot" {
           name        = env.value
           secret_name = local.secret_names[env.value]
         }
+      }
+
+      volume_mount {
+        name       = "sqlite-data"
+        mount_path = "/data"
       }
     }
   }

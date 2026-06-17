@@ -2,7 +2,7 @@ import http from 'node:http';
 import { createMemoryStore, type SessionStore } from 'mcp-toolshed';
 import { startDashboardServer } from '../src/dashboard.js';
 
-async function get(port: number, path: string): Promise<{ status: number; body: unknown }> {
+async function get(port: number, path: string): Promise<{ status: number; body: unknown; contentType?: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(`http://localhost:${port}${path}`, (res) => {
       let data = '';
@@ -10,10 +10,11 @@ async function get(port: number, path: string): Promise<{ status: number; body: 
         data += chunk;
       });
       res.on('end', () => {
+        const contentType = res.headers['content-type'];
         try {
-          resolve({ status: res.statusCode ?? 0, body: data ? JSON.parse(data) : null });
+          resolve({ status: res.statusCode ?? 0, body: data ? JSON.parse(data) : null, contentType });
         } catch {
-          resolve({ status: res.statusCode ?? 0, body: data });
+          resolve({ status: res.statusCode ?? 0, body: data, contentType });
         }
       });
     });
@@ -32,6 +33,14 @@ describe('startDashboardServer', () => {
 
   afterEach(async () => {
     await server.close();
+  });
+
+  it('serves the HTML dashboard at /', async () => {
+    const response = await get(server.port, '/');
+    expect(response.status).toBe(200);
+    expect(response.contentType).toContain('text/html');
+    expect(response.body as string).toContain('<!doctype html>');
+    expect(response.body as string).toContain('Goose Agent Dashboard');
   });
 
   it('returns ok from /health', async () => {

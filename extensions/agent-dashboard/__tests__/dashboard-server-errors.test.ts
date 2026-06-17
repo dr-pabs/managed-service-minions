@@ -64,7 +64,7 @@ describe('startDashboardServer server lifecycle errors', () => {
     await expect(server.close()).rejects.toThrow('close failed');
   });
 
-  it('handles a request with no url', async () => {
+  it('handles a request with no url by falling back to / and serving the dashboard', async () => {
     const fake = createFakeServer();
     let requestHandler: ((req: unknown, res: unknown) => Promise<void>) | undefined;
     const createServer = jest.fn((handler: (req: unknown, res: unknown) => Promise<void>) => {
@@ -85,6 +85,9 @@ describe('startDashboardServer server lifecycle errors', () => {
 
     await requestHandler!({ method: 'GET', url: undefined }, res);
 
-    expect(res.statusCode).toBe(404);
+    // url ?? '/' falls back to '/', which now matches the GET / dashboard route
+    expect(res.statusCode).toBe(200);
+    const html = (res.end.mock.calls[0] as string[])[0];
+    expect(html).toContain('<!doctype html>');
   });
 });

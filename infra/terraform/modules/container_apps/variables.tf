@@ -72,6 +72,22 @@ variable "toolshed" {
   })
 }
 
+variable "sqlite_storage_account_name" {
+  description = "Storage account name for the SQLite Azure File Share."
+  type        = string
+}
+
+variable "sqlite_share_name" {
+  description = "Azure File Share name for SQLite data."
+  type        = string
+}
+
+variable "sqlite_storage_access_key" {
+  description = "Storage account access key for SQLite File Share mount."
+  type        = string
+  sensitive   = true
+}
+
 variable "env_vars" {
   description = "Plain environment variables for container apps."
   type        = map(string)
