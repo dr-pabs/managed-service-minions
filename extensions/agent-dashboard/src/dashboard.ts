@@ -232,7 +232,8 @@ function notFound(res: http.ServerResponse): void {
 export async function startDashboardServer(
   store: SessionStore,
   port: number,
-  createServer: typeof http.createServer = http.createServer
+  createServer: typeof http.createServer = http.createServer,
+  agentTypes: string[] = []
 ): Promise<DashboardServer> {
   const routes: Route[] = [
     {
@@ -286,6 +287,13 @@ export async function startDashboardServer(
       pattern: /^\/pending-approvals$/,
       handler: async (_req, res) => {
         jsonResponse(res, 200, store.listPendingApprovals());
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/api\/config$/,
+      handler: async (_req, res) => {
+        jsonResponse(res, 200, { agentTypes });
       },
     },
   ];

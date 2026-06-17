@@ -203,4 +203,30 @@ describe('startDashboardServer', () => {
     expect(response.status).toBe(500);
     expect(response.body).toEqual({ error: 'string failure' });
   });
+
+  it('returns empty agentTypes from /api/config when none are configured', async () => {
+    const response = await get(server.port, '/api/config');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ agentTypes: [] });
+  });
+
+  it('returns all 7 agent types from /api/config', async () => {
+    const agentTypes = [
+      'code-explorer',
+      'code-reviewer',
+      'pr-crafter',
+      'ticket-analyst',
+      'security-auditor',
+      'code-writer',
+      'test-writer',
+    ];
+    const configServer = await startDashboardServer(createMemoryStore(), 0, http.createServer, agentTypes);
+    try {
+      const response = await get(configServer.port, '/api/config');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ agentTypes });
+    } finally {
+      await configServer.close();
+    }
+  });
 });

@@ -42,6 +42,24 @@ allowlists:
   security_auditor:
     github:
       - github_get_pull_request
+  code_writer:
+    github:
+      - github_get_pull_request
+      - github_get_pull_request_diff
+    azure_devops:
+      - ado_get_pull_request
+      - ado_get_pull_request_diff
+    shell:
+      - execute
+  test_writer:
+    github:
+      - github_get_pull_request
+      - github_get_pull_request_diff
+    azure_devops:
+      - ado_get_pull_request
+      - ado_get_pull_request_diff
+    shell:
+      - execute
 
 path_scopes:
   code_explorer:
@@ -72,6 +90,24 @@ path_scopes:
       - secrets/
       - .env*
   security_auditor:
+    mode: allowlist
+    paths:
+      - /repo
+    deny:
+      - .git/
+      - node_modules/
+      - secrets/
+      - .env*
+  code_writer:
+    mode: allowlist
+    paths:
+      - /repo
+    deny:
+      - .git/
+      - node_modules/
+      - secrets/
+      - .env*
+  test_writer:
     mode: allowlist
     paths:
       - /repo
