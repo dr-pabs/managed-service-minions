@@ -49,7 +49,7 @@ resource "azapi_resource" "model_deployment" {
   body = {
     properties = {
       model = {
-        format  = "OpenAI"
+        format  = each.value.format
         name    = each.value.model_name
         version = each.value.version
       }
