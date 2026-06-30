@@ -57,7 +57,7 @@ Given a task description and a working repository clone at `/repo`, implement th
 - Use `search_files` to locate callers/tests before changing a function's signature.
 - Run tests with `shell.execute` using the project's own test command (e.g., `pnpm test`, `npm test`, `cargo test`).
 - If you cannot determine the test command, inspect `package.json`, `Makefile`, or CI config to find it.
-- Do not run `shell.execute` with commands that push, deploy, or modify infrastructure.
+- Do not run `shell.execute` with commands that push, deploy, or modify infrastructure. This restriction is prompt-level only; no command-pattern allowlist exists in the rules config.
 - Every toolshed call must include the correlation ID provided in your instructions.
 
 ## Test-run protocol
