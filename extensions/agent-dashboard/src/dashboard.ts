@@ -235,6 +235,7 @@ export async function startDashboardServer(
   createServer: typeof http.createServer = http.createServer,
   agentTypes: string[] = []
 ): Promise<DashboardServer> {
+  const configuredAgentTypes = Object.freeze([...agentTypes]);
   const routes: Route[] = [
     {
       method: 'GET',
@@ -290,10 +291,11 @@ export async function startDashboardServer(
       },
     },
     {
+      // Internal operator endpoint — do not expose the dashboard port to untrusted networks.
       method: 'GET',
       pattern: /^\/api\/config$/,
       handler: async (_req, res) => {
-        jsonResponse(res, 200, { agentTypes });
+        jsonResponse(res, 200, { agentTypes: configuredAgentTypes });
       },
     },
   ];

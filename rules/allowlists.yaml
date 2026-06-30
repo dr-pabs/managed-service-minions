@@ -1,3 +1,12 @@
+# Server aliases used in this file map to mcp-toolshed extensions as follows:
+#   github       → mcp-toolshed github extension
+#   azure_devops → mcp-toolshed azure_devops extension
+#   servicenow   → mcp-toolshed servicenow extension
+#   jira         → mcp-toolshed jira extension
+#   shell        → mcp-toolshed shell extension (command execution)
+# Agent frontmatter lists extension names (developer, analyze, mcp-toolshed);
+# the keys here are the server aliases those extensions expose.
+
 allowlists:
   code_explorer:
     github:
@@ -49,6 +58,8 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
+    # shell.execute has no command-pattern allowlist; enforcement is prompt-level only.
+    # Accepted risk: agents run inside the /repo sandbox; prompt restricts usage to test/lint commands.
     shell:
       - execute
   test_writer:
@@ -58,11 +69,12 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
+    # Same accepted risk as code_writer — shell.execute restricted to test-runner commands by prompt.
     shell:
       - execute
 
 path_scopes:
-  code_explorer:
+  code_explorer: &repo-path-scope
     mode: allowlist
     paths:
       - /repo
@@ -71,46 +83,19 @@ path_scopes:
       - node_modules/
       - secrets/
       - .env*
-  code_reviewer:
-    mode: allowlist
-    paths:
-      - /repo
-    deny:
-      - .git/
-      - node_modules/
-      - secrets/
-      - .env*
-  pr_create:
-    mode: allowlist
-    paths:
-      - /repo
-    deny:
-      - .git/
-      - node_modules/
-      - secrets/
-      - .env*
-  security_auditor:
-    mode: allowlist
-    paths:
-      - /repo
-    deny:
-      - .git/
-      - node_modules/
-      - secrets/
-      - .env*
-  code_writer:
-    mode: allowlist
-    paths:
-      - /repo
-    deny:
-      - .git/
-      - node_modules/
-      - secrets/
-      - .env*
+  code_reviewer: *repo-path-scope
+  pr_create: *repo-path-scope
+  security_auditor: *repo-path-scope
+  code_writer: *repo-path-scope
+  # test_writer writes to test directories only; it must not write to src/, lib/, app/, or config.
   test_writer:
     mode: allowlist
     paths:
-      - /repo
+      - /repo/test
+      - /repo/__tests__
+      - /repo/e2e
+      - /repo/integration
+      - /repo/spec
     deny:
       - .git/
       - node_modules/

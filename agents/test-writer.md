@@ -54,7 +54,7 @@ Given a task description and a working repository clone at `/repo`, write integr
 ## Tool guidance
 - Use `read_file` freely on `src/` to understand the interfaces you are testing — but never write to those paths.
 - Determine the integration/E2E test command from the project's `package.json`, `Makefile`, or CI config.
-- Use `shell.execute` to run tests; do not use it to build, deploy, or write files.
+- Use `shell.execute` to run tests only — do not use it to build, deploy, or write files. This restriction is prompt-level only; no command-pattern allowlist exists in the rules config.
 - Scope the test run to the new test files when possible to keep feedback fast.
 - Every toolshed call must include the correlation ID provided in your instructions.
 
