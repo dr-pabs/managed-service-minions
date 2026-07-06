@@ -1,4 +1,4 @@
-# Goose Agent Framework
+# Minions Agent Framework
 
 > Multi-agent orchestration for engineering operations. Mention `@minions` in Slack or Microsoft Teams and delegate complex work — PR reviews, ticket lookups, branch fixes, security audits — to a team of specialized sub-agents ("minions") working through a governed MCP toolshed.
 
@@ -16,7 +16,7 @@
 - [Repository layout](#repository-layout)
 - [Getting started](#getting-started)
 - [Development workflow](#development-workflow)
-- [Running locally with Goose](#running-locally-with-goose)
+- [Running locally with Minions](#running-locally-with-goose)
 - [Testing](#testing)
 - [Deployment](#deployment)
 - [Security & governance](#security--governance)
