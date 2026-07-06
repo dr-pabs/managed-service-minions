@@ -48,6 +48,29 @@ This plan turns the design documents in this repository — `../delivery-specifi
   - [x] Disaster-recovery, production-handoff, and security-review runbooks added under `docs/runbooks/`.
   - [x] Performance and chaos test scaffolding added under `test/performance/` and `test/chaos/`.
   - [ ] Real-environment validation (staging performance/chaos runs), backup/restore drill, dependency/container scanning, and formal security sign-off remain for the production handoff gate.
+- [x] (2026-06-17) Gap 9 — model provider configuration:
+  - All hardcoded model names removed from `rules/models.yaml`. Each tier now has empty `deployment` and `provider` fields with full operator documentation. Tier names (`fast`, `reasoning`, `code_review`, `code_generation`, `security`) remain stable code abstractions.
+  - `infra/terraform/variables.tf` extended with `model_provider_keys` (sensitive `map(string)`, injects API keys verbatim as container secrets) and `model_provider_endpoints` (non-sensitive `map(string)`, injects base URL overrides as container env vars). Uses native provider env var names as keys (e.g., `ANTHROPIC_API_KEY`, `OLLAMA_HOST`).
+  - `infra/terraform/modules/ai_foundry/variables.tf` and `main.tf` updated: `format` field added to deployment objects (`"OpenAI"` for Azure OpenAI Service, `"Azure"` for AI Foundry catalog models such as Claude, Deepseek, Qwen, MiMo).
+  - `infra/terraform/main.tf` updated: `env_vars` and `secrets` now use `merge()` to inject `model_provider_endpoints` and `model_provider_keys` alongside the fixed platform secrets — no special naming conventions required.
+  - `infra/terraform/environments/dev/terraform.tfvars` rewritten as a clean operator template: deprecated gpt-4o-mini/gpt-4.1 entries removed, all fields replaced with commented examples showing structure for Azure OpenAI, AI Foundry catalog (Claude, Deepseek, Qwen), Ollama, and vLLM. Operators fill in current model names at deploy time; no model names are committed.
+- [x] (2026-06-17) Gap 10 — code-writer and test-writer agents:
+  - **code-writer** (`agents/code-writer.md`): implements bug fixes, features, and unit tests. Tier: `code_generation`, budget: 50 000 tokens. Granted `shell.execute` access via `rules/allowlists.yaml` (shell server alias) to run tests before returning. Path scope: `/repo` with standard deny list. Output schema: `schemas/code-writer-output.json`.
+  - **test-writer** (`agents/test-writer.md`): writes integration, acceptance, and E2E tests only — explicitly does not touch implementation files and does not write unit tests. Tier: `code_generation`, budget: 40 000 tokens. Same `shell.execute` and filesystem access as code-writer; implementation-file write restrictions enforced at the agent prompt level. Output schema: `schemas/test-writer-output.json`.
+  - Both agents added to `rules/models.yaml` `agents:` section and `rules/allowlists.yaml` (allowlists + path_scopes).
+  - `extensions/agent-dashboard/src/dashboard.ts` extended with `GET /api/config` endpoint returning `{ agentTypes: string[] }` and optional `agentTypes` parameter on `startDashboardServer`. Dashboard tests updated: two new tests assert the default empty case and all 7 agent types; 20 tests pass at 100% coverage.
+- [x] (2026-06-17) Gap 7 — async/proactive messaging:
+  - **Slack** (`extensions/slack-bot/src/slack-bot.ts`): replaced the synchronous `handleSlackMessage` pattern with a fire-and-acknowledge pattern. Both `app_mention` and `message` (DM) handlers now: (1) `await say(ack)` immediately so Bolt returns HTTP 200 before the 3-second Slack window closes, suppressing duplicate retries; (2) `void postSlackResponse(...)` fires the Goose run in the background; (3) the result is posted proactively via `client.chat.postMessage({ channel, thread_ts, text, blocks? })`. `SlackPoster` interface (duck-typed `WebClient` subset) added for testability.
+  - **Teams** (`extensions/teams-bot/src/teams-bot.ts`): replaced the synchronous `handleTeamsMessage` pattern. The message handler now: (1) captures the conversation reference via `TurnContext.getConversationReference(activity)` before the turn ends; (2) `await context.sendActivity(ack)` sends the immediate acknowledgement; (3) `void postTeamsResponse(...)` fires the Goose run in the background; (4) the result is delivered proactively via `adapter.continueConversation(conversationRef, callback)`. `TurnContext` imported as a value (not a type-only import) to access the static method.
+  - Both extensions maintain 100% line/branch/function/statement coverage. New test cases cover: ack-before-run, proactive result, proactive error, empty-array blocks, missing channel field.
+- [x] (2026-06-17) Gap fixes — production blockers 4–6 resolved:
+  - [x] Gap 4: Private endpoints and private DNS zones added to `infra/terraform/main.tf` for Key Vault (`vault`), Storage (`blob`, `table`, `file`), and Service Bus (`namespace`) — each with an `azurerm_private_dns_zone`, `azurerm_private_dns_zone_virtual_network_link`, and `azurerm_private_endpoint` with a `private_dns_zone_group`. All five services are now privately accessible from Container Apps and not publicly reachable. Terraform test `private_endpoints_secure_all_services` added.
+  - [x] Gap 5: `infra/terraform/modules/storage/main.tf` extended with `azurerm_storage_share.sqlite_data` (5 GB quota). `container_apps` module extended with `azurerm_container_app_environment_storage.sqlite` and `volume`/`volume_mount` blocks in all five container apps mounting the share at `/data`. `SQLITE_PATH=/data/sessions.sqlite` wired into `env_vars` in root `main.tf`. Terraform test `sqlite_volume_is_mounted_in_all_apps` added.
+  - [x] Gap 6: `extensions/agent-dashboard/src/dashboard.ts` extended with a `GET /` route that serves a self-contained HTML/JS dashboard UI (`DASHBOARD_HTML` constant). The UI shows live sessions, minion runs per session, pending approvals, and a correlation tree; auto-refreshes every 5 seconds. `htmlResponse` helper added. All three test suites updated; 100% TypeScript coverage maintained.
+- [x] (2026-06-17) Gap fixes — production blockers 1–3 resolved:
+  - [x] Gap 1: `createEchoRunner` replaced with `createGooseRunner` in both `extensions/slack-bot/src/index.ts` and `extensions/teams-bot/src/index.ts`. `GooseRunner` implemented in `packages/framework-core/src/goose-runner.ts`; POSTs to `GOOSE_SERVE_URL/reply` (default `http://localhost:3284`); injectable `fetch` for testing; 100% coverage across all branches and functions.
+  - [x] Gap 2: Terraform `variables.tf` extended with 9 new sensitive variables (`slack_bot_token`, `slack_signing_secret`, `microsoft_app_id`, `microsoft_app_password`, `github_token`, `azure_devops_pat`, `servicenow_api_key`, `jira_api_token`, `goose_serve_url`). `main.tf` expanded: secrets map now includes all 8 platform/integration tokens plus `GOOSE_SERVE_URL` env var; Key Vault Secrets User role added for `dashboard` and `toolshed` identities; Storage Table Data Contributor added for `toolshed`, `dashboard`, `slack_bot`, `teams_bot`; Cognitive Services OpenAI User added for `toolshed` and `dashboard`.
+  - [x] Gap 3: `extensions/orchestrator/Dockerfile` created — multi-stage build that installs Goose CLI binary, builds `mcp-toolshed`, copies the framework plugin, and runs `goose serve --port 3284 --with-extension node /app/toolshed/index.js`. Added `orchestrator` entry to `.github/workflows/container-build.yml` build matrix.
 
 ## Remaining Work
 
@@ -60,7 +83,7 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 ### Terraform Platform Hardening
 
-1. Commit a default `ai_model_deployments` configuration for dev (e.g., GPT-4o mini) in `infra/terraform/environments/dev/terraform.tfvars`.
+1. ~~Commit a default `ai_model_deployments` configuration for dev~~ — Resolved 2026-06-17 (Gap 9): `terraform.tfvars` rewritten as operator template; no model names hardcoded.
 2. Add staging and prod environment directories under `infra/terraform/environments/`.
 3. Add geo-redundant storage for SQLite state (backup/restore runbook and policy are already documented).
 4. Add Log Analytics queries and/or Grafana dashboard definitions for minion status, tool-call audit, and cost.
@@ -69,10 +92,19 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
 
 1. Add interactive approval buttons/cards to Slack and Teams bot responses.
 2. Optionally serve a basic HTML/JS frontend from `extensions/agent-dashboard`.
+3. ~~Add async/proactive messaging~~ — Resolved 2026-06-17 (Gap 7): fire-and-acknowledge pattern implemented in both Slack and Teams bots; proactive delivery via `client.chat.postMessage` and `adapter.continueConversation` respectively.
 
 ### Runtime Governance and Approvals
 
 1. Integrate approval requests with Slack/Teams interactive messages and the dashboard UI.
+
+### Infrastructure Gaps (next priority)
+
+The following infrastructure gaps were identified in the 2026-06-17 gap analysis and must be addressed before production:
+
+4. ~~Private endpoints & DNS~~ — Resolved 2026-06-17; see Progress above.
+5. ~~SQLite volume mounts~~ — Resolved 2026-06-17; see Progress above.
+6. ~~Dashboard frontend~~ — Resolved 2026-06-17; see Progress above.
 
 ### Integration, Acceptance, and Handoff
 
@@ -129,6 +161,38 @@ The framework is functionally complete, all TypeScript packages hit the 100% cov
   - Evidence: The `office-town-plugin` recipes live in `~/.agents/plugins/office-town/commands/`, but `goose recipe list` found none until `GOOSE_RECIPE_PATH` pointed at that directory. `goose run --recipe ~/.agents/plugins/office-town/commands/<recipe>.yaml` worked directly.
 
 ## Decision Log
+
+- **Decision:** Implement `GooseRunner` in `packages/framework-core` (shared) rather than duplicating it in each bot extension.
+  - **Rationale:** The `IngressRunner` interface is already defined in `framework-core`. Placing `GooseRunner` there keeps the coupling symmetrical — both bots depend on `framework-core` and get the runner for free. No code duplication.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Inject `fetch` as a config parameter rather than monkey-patching `globalThis.fetch` or using a DI container.
+  - **Rationale:** Node 20+ has native `fetch`; the default production path requires no extra dependency. Injection keeps tests pure: pass a `jest.fn()` rather than stubbing globals. The one test that exercises the global-fetch path assigns to `globalThis.fetch` temporarily and restores it in a `finally` block.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Place private endpoint and DNS zone resources in root `main.tf` rather than inside the `networking` module.
+  - **Rationale:** Private endpoints reference IDs from storage, keyvault, and service_bus modules. Putting them in `networking` would require passing those IDs as variables, creating cross-module coupling. Root resources can reference all module outputs directly; Terraform resolves the dependency graph automatically.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Mount a single Azure File Share at `/data` in all five container apps and use `SQLITE_PATH=/data/sessions.sqlite` for all.
+  - **Rationale:** All five apps (orchestrator, slack-bot, teams-bot, toolshed, dashboard) use SQLite for session state. Sharing one File Share simplifies provisioning, and using the same path avoids per-app environment variable variation. The share is 5 GB, which is sufficient for v1 session volumes.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Serve the dashboard HTML UI as an inline constant in `dashboard.ts` rather than a static file served from disk.
+  - **Rationale:** The dashboard server is a zero-dependency Node.js HTTP server (no Express, no static-file middleware). Inlining the HTML avoids working-directory assumptions in the container, keeps tests hermetic, and requires no change to the Dockerfile.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Never hardcode model names or versions anywhere in the codebase; tier names are stable, specific models are operator configuration.
+  - **Rationale:** Model names and version strings rotate rapidly across all providers (OpenAI, Anthropic, Deepseek, ZhipuAI, etc.). Hardcoding them creates immediate technical debt and misleads operators who have different model access. Tier names (`fast`, `reasoning`, `code_review`, `code_generation`, `security`) are semantically stable; the model behind each tier is chosen by the operator at deploy time via `rules/models.yaml` and `terraform.tfvars`.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Use native provider env var names as keys for `model_provider_keys` and `model_provider_endpoints`.
+  - **Rationale:** Provider SDKs look for specific env vars (e.g., `ANTHROPIC_API_KEY`, `OLLAMA_HOST`). Using those same names as map keys means the operator sees a single canonical location to set them, and the container picks them up with zero extra mapping or naming conventions.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
+
+- **Decision:** Expand all container app secrets in the shared `secrets` map rather than building per-app secret maps.
+  - **Rationale:** The current Terraform `container_apps` module accepts a single `secrets` map applied to all apps. Adding per-app maps would require significant module surgery. All containers getting all secrets is over-privileged but acceptable for v1; the Key Vault RBAC ensures only containers with the correct managed identity can actually read the underlying secret values.
+  - **Date/Author:** 2026-06-17 / Claude Sonnet 4.6
 
 - **Decision:** Deliver the framework as a Goose **plugin** plus **MCP extensions**, not as a monolithic TypeScript service.
   - **Rationale:** The live Goose CLI separates plugins (skills/agents/hooks) from extensions (MCP tool servers). The orchestrator is a skill/agent that instructs Goose to classify intent, build a DAG, and call `delegate`. The MCP toolshed, Slack bot, Teams bot, and dashboard backend are MCP extensions that expose tools to the agent. This matches Goose's native packaging model.

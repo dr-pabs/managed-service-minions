@@ -31,13 +31,14 @@ variable "key_vault_id" {
 }
 
 variable "model_deployments" {
-  description = "List of model deployments."
+  description = "List of model deployments. Set format = \"OpenAI\" for Azure OpenAI Service models; format = \"Azure\" for AI Foundry catalog models (e.g. Claude, Deepseek, Qwen)."
   type = list(object({
     name       = string
     model_name = string
     version    = string
     sku        = string
     capacity   = number
+    format     = optional(string, "OpenAI")
   }))
   default = []
 }

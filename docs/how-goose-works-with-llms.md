@@ -135,57 +135,44 @@ Goose has a **provider abstraction** that decouples the LLM API from the agent l
 - Handles Azure-specific features: content filtering responses, provisioned throughput headers
 - Routes to the correct model deployment within the Foundry project
 
-### Tier-based provider configuration (conceptual)
+### Tier-based provider configuration
+
+The actual configuration file is `rules/models.yaml`. This is the **only file** that changes when models are upgraded, retired, or switched between providers. No code changes are required.
 
 ```yaml
-# provider.yaml — maps tiers to actual Azure AI Foundry deployments
-# This is the ONLY file that changes when models are upgraded or retired.
+# rules/models.yaml — operator fills in deployment and provider for each tier.
+# Specific model names and versions are never committed to the codebase.
+# See the file header for full field documentation.
 tiers:
   fast:
-    provider: azure_openai
-    endpoint: https://foundry-project-xyz.openai.azure.com
-    deployment: gpt-4o-mini-2025-07         # current fast model
-    api_version: "2025-03-01-preview"
-    authentication: managed_identity
-    temperature: 0.0
-    fallback: gpt-4o-mini-2025-01
+    deployment: ""      # e.g. the deployment name in Azure AI Foundry, or a model slug
+    provider: ""        # e.g. azure  anthropic  openai  ollama  deepseek  zhipu
+    max_tokens_per_call: 4096
 
   reasoning:
-    provider: azure_openai
-    endpoint: https://foundry-project-xyz.openai.azure.com
-    deployment: gpt-4.1                      # replaced retired gpt-4o
-    api_version: "2025-03-01-preview"
-    authentication: managed_identity
-    temperature: 0.3
-    fallback: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 16384
 
   code_review:
-    provider: azure_openai
-    endpoint: https://foundry-project-xyz.openai.azure.com
-    deployment: claude-sonnet-4-8            # Sonnet 4.8 (was 3.5)
-    api_version: "2025-03-01-preview"
-    authentication: managed_identity
-    temperature: 0.2
-    fallback: gpt-4.1
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 32768
 
   code_generation:
-    provider: azure_openai
-    endpoint: https://foundry-project-xyz.openai.azure.com
-    deployment: gpt-4.1
-    api_version: "2025-03-01-preview"
-    authentication: managed_identity
-    temperature: 0.3
-    fallback: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 16384
 
   security:
-    provider: azure_openai
-    endpoint: https://foundry-project-xyz.openai.azure.com
-    deployment: claude-sonnet-4-8
-    api_version: "2025-03-01-preview"
-    authentication: managed_identity
-    temperature: 0.1
-    fallback: gpt-4.1
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 32768
 ```
+
+The `provider` field maps to the API client Goose uses: `azure` for Azure AI Foundry (authenticates via managed identity, no API key in code), or any external provider name whose API key is supplied in `model_provider_keys` in Terraform. The `deployment` is whatever that provider's API accepts as the model identifier — an Azure deployment name, an Anthropic model ID, an Ollama tag, etc.
+
+**This design intentionally keeps model names out of the repository.** Providers release new model versions frequently; version strings embedded in code become stale within weeks. Operators choose current models at deploy time.
 
 ---
 
@@ -461,43 +448,39 @@ minions:
     ...
 ```
 
-The provider configuration maps tiers to deployments:
+The tier configuration in `rules/models.yaml` maps each tier to a deployment and provider. At runtime, the orchestrator reads these fields and routes each minion to the correct API client:
 
 ```yaml
-# provider.yaml — in the container image, swapped per environment
+# rules/models.yaml — operator sets deployment and provider at deploy time.
+# No model names are committed in the codebase.
 tiers:
   fast:
-    provider: azure_openai
-    deployment: gpt-4o-mini-2025-07        # current fast model
-    endpoint: ${FOUNDRY_ENDPOINT}
-    fallback: gpt-4o-mini-2025-01          # previous version if current unavailable
+    deployment: ""      # fill in: Azure deployment name, model slug, or Ollama tag
+    provider: ""        # fill in: azure | anthropic | openai | ollama | deepseek | zhipu | ...
+    max_tokens_per_call: 4096
 
   reasoning:
-    provider: azure_openai
-    deployment: gpt-4.1                     # replaced retired gpt-4o
-    endpoint: ${FOUNDRY_ENDPOINT}
-    fallback: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 16384
 
   code_review:
-    provider: azure_openai
-    deployment: claude-sonnet-4-8           # Sonnet 4.8 (was 3.5)
-    endpoint: ${FOUNDRY_ENDPOINT}
-    fallback: gpt-4.1
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 32768
 
   code_generation:
-    provider: azure_openai
-    deployment: gpt-4.1
-    endpoint: ${FOUNDRY_ENDPOINT}
-    fallback: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 16384
 
   security:
-    provider: azure_openai
-    deployment: claude-sonnet-4-8
-    endpoint: ${FOUNDRY_ENDPOINT}
-    fallback: gpt-4.1
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 32768
 ```
 
-**Model changes are a config deployment, not a code change.** When a model is retired or a new version ships, only `provider.yaml` changes — no prompt changes, no code changes, no redeployment of minion logic.
+**Model changes are a config deployment, not a code change.** When a model is retired or a new version ships, only `rules/models.yaml` changes — no prompt changes, no code changes, no container rebuild required. For Azure AI Foundry deployments, also update `ai_model_deployments` in `infra/terraform/environments/<env>/terraform.tfvars`.
 
 ---
 

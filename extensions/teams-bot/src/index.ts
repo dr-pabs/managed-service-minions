@@ -1,6 +1,7 @@
 import { Application, TeamsAdapter } from '@microsoft/teams-ai';
 import { createSqliteStore } from 'mcp-toolshed';
-import { createTeamsBot, createEchoRunner } from './teams-bot.js';
+import { createGooseRunner } from 'framework-core';
+import { createTeamsBot } from './teams-bot.js';
 
 const botFrameworkAuthConfig = {
   MicrosoftAppId: process.env.MICROSOFT_APP_ID ?? '',
@@ -16,7 +17,9 @@ const app = new Application({
 });
 
 const store = createSqliteStore(process.env.SQLITE_PATH ?? ':memory:');
-const runner = createEchoRunner();
+const runner = createGooseRunner({
+  baseUrl: process.env.GOOSE_SERVE_URL ?? 'http://localhost:3284',
+});
 const bot = createTeamsBot(app, store, runner, {
   port: Number(process.env.PORT ?? 3978),
 });

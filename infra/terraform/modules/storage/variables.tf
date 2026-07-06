@@ -39,6 +39,12 @@ variable "role_assignments" {
   default = []
 }
 
+variable "sqlite_share_quota_gb" {
+  description = "Quota in GB for the SQLite Azure File Share."
+  type        = number
+  default     = 5
+}
+
 variable "tags" {
   description = "Resource tags."
   type        = map(string)

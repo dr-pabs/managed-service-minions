@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Output contract for the test-writer agent. Referenced by the output_schema frontmatter field; framework output validation must enforce this schema against agent responses.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "files_created": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "tests_written": { "type": "integer", "minimum": 0 },
+    "tests_passed": { "type": "boolean" },
+    "test_output": { "type": "string" },
+    "summary": { "type": "string" }
+  },
+  "required": ["files_created", "tests_written", "tests_passed", "summary"]
+}

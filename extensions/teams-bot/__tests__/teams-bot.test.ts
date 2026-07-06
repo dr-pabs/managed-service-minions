@@ -5,6 +5,11 @@ import type { Activity, TurnContext } from 'botbuilder';
 import { createTeamsBot, createEchoRunner } from '../src/teams-bot.js';
 import type { IngressRunner, SessionStore } from 'framework-core';
 
+// Drain the microtask / I/O queue so fire-and-forget background work completes.
+function flushAsync(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 class MockApplication {
   public messageHandlers: Array<(context: TurnContext, state: unknown) => Promise<void>> = [];
 
@@ -27,6 +32,15 @@ class MockApplication {
         sendActivity: jest.fn().mockResolvedValue({}),
       } as unknown as TurnContext;
       await logic(context);
+    }),
+    // Proactive messaging: call the logic callback with a fresh mock context so
+    // tests can inspect what was sent via continueConversation.
+    continueConversation: jest.fn().mockImplementation(async (_ref: unknown, logic: (ctx: TurnContext) => Promise<void>) => {
+      const proactiveCtx = {
+        activity: {} as Activity,
+        sendActivity: jest.fn().mockResolvedValue({}),
+      } as unknown as TurnContext;
+      await logic(proactiveCtx);
     }),
   };
 
@@ -76,17 +90,19 @@ describe('createTeamsBot', () => {
     expect(app.message).toHaveBeenCalledWith(/.*/, expect.any(Function));
   });
 
-  it('handles a Teams message and replies with runner text', async () => {
+  it('acknowledges a Teams message immediately then sends the reply proactively', async () => {
     createTeamsBot(app as unknown as Application, store, runner);
     const context = createContext({
       type: 'message',
       text: 'review PR #42',
-      conversation: { id: 'conv-1', tenantId: 'tenant-1' },
-      from: { id: 'user-1' },
+      conversation: { id: 'conv-1', tenantId: 'tenant-1', isGroup: false, conversationType: 'channel', name: '' },
+      from: { id: 'user-1', name: '' },
     });
 
     await app.messageHandlers[0](context, {});
 
+    // Ack sent synchronously before Goose runs
+    expect(context.sendActivity).toHaveBeenCalledWith(':hourglass_flowing_sand: Working on it…');
     expect(runner.run).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: 'teams',
@@ -97,7 +113,15 @@ describe('createTeamsBot', () => {
         threadId: 'conv-1',
       })
     );
-    expect(context.sendActivity).toHaveBeenCalledWith('Done');
+
+    await flushAsync();
+
+    // Proactive reply sent via continueConversation
+    expect(app.adapter.continueConversation).toHaveBeenCalled();
+    const [[, logic]] = (app.adapter.continueConversation as jest.Mock).mock.calls as [[unknown, (ctx: TurnContext) => Promise<void>]];
+    const proactiveCtx = { sendActivity: jest.fn().mockResolvedValue({}) } as unknown as TurnContext;
+    await logic(proactiveCtx);
+    expect(proactiveCtx.sendActivity).toHaveBeenCalledWith('Done');
   });
 
   it('ignores messages with no text', async () => {
@@ -105,8 +129,8 @@ describe('createTeamsBot', () => {
     const context = createContext({
       type: 'message',
       text: undefined,
-      conversation: { id: 'conv-1' },
-      from: { id: 'user-1' },
+      conversation: { id: 'conv-1', isGroup: false, conversationType: 'channel', name: '' },
+      from: { id: 'user-1', name: '' },
     });
 
     await app.messageHandlers[0](context, {});
@@ -134,7 +158,7 @@ describe('createTeamsBot', () => {
     );
   });
 
-  it('sends an Adaptive Card when the runner returns one', async () => {
+  it('sends an Adaptive Card proactively when the runner returns one', async () => {
     runner = {
       run: jest.fn().mockResolvedValue({
         text: 'Summary',
@@ -146,54 +170,73 @@ describe('createTeamsBot', () => {
     const context = createContext({
       type: 'message',
       text: 'summarize',
-      conversation: { id: 'conv-1' },
-      from: { id: 'user-1' },
+      conversation: { id: 'conv-1', isGroup: false, conversationType: 'channel', name: '' },
+      from: { id: 'user-1', name: '' },
     });
 
     await app.messageHandlers[0](context, {});
+    await flushAsync();
 
-    expect(context.sendActivity).toHaveBeenCalledWith(
+    expect(app.adapter.continueConversation).toHaveBeenCalled();
+    const [[, logic]] = (app.adapter.continueConversation as jest.Mock).mock.calls as [[unknown, (ctx: TurnContext) => Promise<void>]];
+    const proactiveCtx = { sendActivity: jest.fn().mockResolvedValue({}) } as unknown as TurnContext;
+    await logic(proactiveCtx);
+    expect(proactiveCtx.sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         text: 'Summary',
         attachments: expect.arrayContaining([
           expect.objectContaining({
             contentType: 'application/vnd.microsoft.card.adaptive',
           }),
-        ]),
+        ]) as unknown[],
       })
     );
   });
 
-  it('surfaces runner errors as user-facing messages', async () => {
+  it('sends runner errors proactively as user-facing messages', async () => {
     runner = { run: jest.fn().mockRejectedValue(new Error('boom')) };
 
     createTeamsBot(app as unknown as Application, store, runner);
     const context = createContext({
       type: 'message',
       text: 'fail',
-      conversation: { id: 'conv-1' },
-      from: { id: 'user-1' },
+      conversation: { id: 'conv-1', isGroup: false, conversationType: 'channel', name: '' },
+      from: { id: 'user-1', name: '' },
     });
 
     await app.messageHandlers[0](context, {});
 
-    expect(context.sendActivity).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    // Ack still sent immediately
+    expect(context.sendActivity).toHaveBeenCalledWith(':hourglass_flowing_sand: Working on it…');
+
+    await flushAsync();
+
+    expect(app.adapter.continueConversation).toHaveBeenCalled();
+    const [[, logic]] = (app.adapter.continueConversation as jest.Mock).mock.calls as [[unknown, (ctx: TurnContext) => Promise<void>]];
+    const proactiveCtx = { sendActivity: jest.fn().mockResolvedValue({}) } as unknown as TurnContext;
+    await logic(proactiveCtx);
+    expect(proactiveCtx.sendActivity).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });
 
-  it('surfaces non-Error failures as user-facing messages', async () => {
+  it('sends non-Error failures proactively as user-facing messages', async () => {
     runner = { run: jest.fn().mockRejectedValue('string failure') };
 
     createTeamsBot(app as unknown as Application, store, runner);
     const context = createContext({
       type: 'message',
       text: 'fail',
-      conversation: { id: 'conv-1' },
-      from: { id: 'user-1' },
+      conversation: { id: 'conv-1', isGroup: false, conversationType: 'channel', name: '' },
+      from: { id: 'user-1', name: '' },
     });
 
     await app.messageHandlers[0](context, {});
+    await flushAsync();
 
-    expect(context.sendActivity).toHaveBeenCalledWith(expect.stringContaining('string failure'));
+    expect(app.adapter.continueConversation).toHaveBeenCalled();
+    const [[, logic]] = (app.adapter.continueConversation as jest.Mock).mock.calls as [[unknown, (ctx: TurnContext) => Promise<void>]];
+    const proactiveCtx = { sendActivity: jest.fn().mockResolvedValue({}) } as unknown as TurnContext;
+    await logic(proactiveCtx);
+    expect(proactiveCtx.sendActivity).toHaveBeenCalledWith(expect.stringContaining('string failure'));
   });
 
   it('starts and stops the HTTP server and forwards requests to the adapter', async () => {

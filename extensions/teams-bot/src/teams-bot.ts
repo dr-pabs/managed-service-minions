@@ -1,8 +1,8 @@
 import http from 'node:http';
 import type { Application } from '@microsoft/teams-ai';
 import { TeamsAdapter } from '@microsoft/teams-ai';
-import type { Activity, TurnContext } from 'botbuilder';
-import { CardFactory } from 'botbuilder';
+import { CardFactory, TurnContext } from 'botbuilder';
+import type { Activity, ConversationReference } from 'botbuilder';
 import type { Request as BotRequest, Response as BotResponse } from 'botbuilder';
 import {
   formatError,
@@ -91,7 +91,16 @@ export function createTeamsBot(
       return;
     }
 
-    await handleTeamsMessage(request, store, runner, context);
+    // Capture before the turn ends — context is only valid during this turn.
+    const conversationRef = TurnContext.getConversationReference(context.activity);
+    const adapter = app.adapter as TeamsAdapter;
+
+    // Acknowledge immediately. Teams/Bot Framework sends its HTTP 202 when this
+    // handler resolves, so the user gets an instant "working on it" before the
+    // long Goose run starts.
+    await context.sendActivity(':hourglass_flowing_sand: Working on it…');
+
+    void postTeamsResponse(request, store, runner, adapter, conversationRef);
   });
 
   let server: http.Server | undefined;
@@ -128,15 +137,18 @@ export function createTeamsBot(
   };
 }
 
-async function handleTeamsMessage(
+async function postTeamsResponse(
   request: IngressRequest,
   store: SessionStore,
   runner: IngressRunner,
-  context: TurnContext
+  adapter: TeamsAdapter,
+  conversationRef: Partial<ConversationReference>
 ): Promise<void> {
   try {
     const response = await handleIngressMessage(request, store, runner);
-    await sendTeamsResponse(context, response);
+    await adapter.continueConversation(conversationRef, async (ctx: TurnContext) => {
+      await sendTeamsResponse(ctx, response);
+    });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     const summary = formatError({
@@ -147,7 +159,9 @@ async function handleTeamsMessage(
       action: 'Try again or contact the platform team with the session id.',
       correlationId: 'unknown',
     });
-    await context.sendActivity(summary);
+    await adapter.continueConversation(conversationRef, async (ctx: TurnContext) => {
+      await ctx.sendActivity(summary);
+    });
   }
 }
 

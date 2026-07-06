@@ -1,19 +1,77 @@
+# Model tier routing for the Goose Agent Framework.
+#
+# Tier names are stable; the model behind each tier is operator configuration.
+# Set deployment and provider to whatever is current in your environment.
+# The codebase never hardcodes specific model versions.
+#
+# ── Fields ────────────────────────────────────────────────────────────────────
+#
+# deployment:
+#   The model identifier passed to the provider.
+#   For Azure AI Foundry:   the deployment name you created in the portal / Terraform.
+#   For Anthropic API:      the model ID from Anthropic's documentation.
+#   For OpenAI API:         the model name (e.g. the model slug, not the version).
+#   For Ollama / vLLM:      the model tag as it appears in `ollama list`.
+#   For any other provider: whatever the provider's API accepts as the model field.
+#
+# provider:
+#   A string key Goose uses to resolve the right API client and credentials.
+#   Common values: azure  anthropic  openai  ollama  deepseek  zhipu  mistral
+#   Any OpenAI-compatible server can be addressed by setting provider + endpoint.
+#
+# endpoint:   (optional)
+#   Full base URL override for providers that are not at the standard URL.
+#   Omit for hosted services. Required for local inference servers.
+#   Populated from the MODEL_ENDPOINT_<PROVIDER_UPPER> env var if left blank here.
+#
+# max_tokens_per_call:
+#   Hard cap on tokens requested per call for cost and latency control.
+#   Set this per-tier to match the model's context window and your budget.
+#
+# ── How to configure ─────────────────────────────────────────────────────────
+#
+# 1. Set deployment + provider for each tier (below).
+# 2. In Terraform, populate model_provider_keys with any API key env vars
+#    (e.g. ANTHROPIC_API_KEY, DEEPSEEK_API_KEY) and model_provider_endpoints
+#    for any non-standard base URLs (e.g. OLLAMA_HOST).
+# 3. For Azure AI Foundry hosted models, add an entry to ai_model_deployments
+#    in terraform.tfvars with the matching deployment name.
+# 4. Restart the orchestrator container — Goose picks up the new config.
+
 tiers:
+  # Intent classification, quick lookups, low-latency responses.
   fast:
-    deployment: gpt-4o-mini
+    deployment: ""
+    provider: ""
     max_tokens_per_call: 4096
+
+  # Orchestration, task decomposition, structured output.
   reasoning:
-    deployment: gpt-4.1
+    deployment: ""
+    provider: ""
     max_tokens_per_call: 16384
+
+  # Code review — deep diff analysis, multi-file reasoning.
   code_review:
-    deployment: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
     max_tokens_per_call: 32768
+
+  # Code generation — PR crafter, patch writing.
   code_generation:
-    deployment: gpt-4.1
+    deployment: ""
+    provider: ""
     max_tokens_per_call: 16384
+
+  # Security auditing — adversarial reasoning, vulnerability analysis.
   security:
-    deployment: claude-sonnet-4-8
+    deployment: ""
+    provider: ""
     max_tokens_per_call: 32768
+
+# ── Agent tier assignments ────────────────────────────────────────────────────
+# These map each agent to a tier above. Change the tier value to route an agent
+# to a different model without touching any application code.
 
 agents:
   orchestrator:
@@ -33,6 +91,12 @@ agents:
     budget: 10000
   security-auditor:
     tier: security
+    budget: 40000
+  code-writer:
+    tier: code_generation
+    budget: 50000
+  test-writer:
+    tier: code_generation
     budget: 40000
 
 skills:

@@ -75,6 +75,20 @@ mock_provider "azurerm" {
   }
 
   override_resource {
+    target = module.networking.azurerm_virtual_network.main
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
+    target = module.networking.azurerm_subnet.private_endpoints
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/virtualNetworks/vnet-goosetest-test/subnets/snet-pe-vnet-goosetest-test"
+    }
+  }
+
+  override_resource {
     target = module.keyvault.azurerm_key_vault.main
     values = {
       id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.KeyVault/vaults/kv-goosetest-test"
@@ -85,8 +99,23 @@ mock_provider "azurerm" {
   override_resource {
     target = module.storage.azurerm_storage_account.main
     values = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
-      name = "stgoosetesttestabc123"
+      id                 = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Storage/storageAccounts/stgoosetesttestabc123"
+      name               = "stgoosetesttestabc123"
+      primary_access_key = "bW9ja2FjY2Vzc2tleWZvcnRlc3Rpbmcx"
+    }
+  }
+
+  override_resource {
+    target = module.storage.azurerm_storage_share.sqlite_data
+    values = {
+      name = "sqlite-data"
+    }
+  }
+
+  override_resource {
+    target = module.container_apps.azurerm_container_app_environment_storage.sqlite
+    values = {
+      name = "sqlite-data"
     }
   }
 
@@ -122,6 +151,41 @@ mock_provider "azurerm" {
     values = {
       id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.App/managedEnvironments/cae-goosetest-test"
       log_analytics_workspace_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.OperationalInsights/workspaces/la-goosetest-test"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.keyvault
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_blob
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_table
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.storage_file
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
+    }
+  }
+
+  override_resource {
+    target = azurerm_private_dns_zone.service_bus
+    values = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net"
     }
   }
 }
@@ -235,5 +299,58 @@ run "toolshed_app_is_deployed" {
   assert {
     condition     = module.container_apps.toolshed_name == "ca-toolshed-test"
     error_message = "Toolshed container app should be deployed with the expected name."
+  }
+}
+
+run "private_endpoints_secure_all_services" {
+  command = plan
+
+  assert {
+    condition     = azurerm_private_endpoint.keyvault.name == "pe-kv-goosetest-test"
+    error_message = "Key Vault private endpoint must be created with the expected name."
+  }
+
+  assert {
+    condition     = azurerm_private_dns_zone.keyvault.name == "privatelink.vaultcore.azure.net"
+    error_message = "Key Vault private DNS zone must use the correct Azure zone name."
+  }
+
+  assert {
+    condition     = azurerm_private_endpoint.storage_blob.name == "pe-st-blob-goosetest-test"
+    error_message = "Storage blob private endpoint must be created."
+  }
+
+  assert {
+    condition     = azurerm_private_endpoint.storage_table.name == "pe-st-table-goosetest-test"
+    error_message = "Storage table private endpoint must be created."
+  }
+
+  assert {
+    condition     = azurerm_private_endpoint.storage_file.name == "pe-st-file-goosetest-test"
+    error_message = "Storage file private endpoint must be created for the SQLite File Share."
+  }
+
+  assert {
+    condition     = azurerm_private_endpoint.service_bus.name == "pe-sb-goosetest-test"
+    error_message = "Service Bus private endpoint must be created."
+  }
+
+  assert {
+    condition     = azurerm_private_dns_zone.service_bus.name == "privatelink.servicebus.windows.net"
+    error_message = "Service Bus private DNS zone must use the correct Azure zone name."
+  }
+}
+
+run "sqlite_volume_is_mounted_in_all_apps" {
+  command = plan
+
+  assert {
+    condition     = module.container_apps.sqlite_storage_name == "sqlite-data"
+    error_message = "Container Apps environment storage must be configured for the sqlite-data file share."
+  }
+
+  assert {
+    condition     = can(regex("SQLITE_PATH", file("${path.root}/main.tf")))
+    error_message = "SQLITE_PATH must be set in the container apps env_vars."
   }
 }
