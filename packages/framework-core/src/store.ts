@@ -64,5 +64,5 @@ export interface SessionStore {
   createAuditEntry(entry: AuditEntry): void;
   listAuditEntries(filters?: { correlationId?: string; limit?: number; offset?: number }): AuditEntry[];
   getCachedToolCall(key: string): unknown | undefined;
-  setCachedToolCall(key: string, value: unknown): void;
+  setCachedToolCall(key: string, value: unknown, ttlMs: number): void;
 }

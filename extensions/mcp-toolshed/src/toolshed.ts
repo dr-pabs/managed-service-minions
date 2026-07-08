@@ -3,6 +3,7 @@ import type { SessionStore, PendingApproval, AuditEntry } from 'framework-core';
 import {
   type AllowlistConfig,
   type GovernanceConfig,
+  getCachePolicy,
   isDestructive,
   isPathAllowed,
   isToolAllowed,
@@ -237,11 +238,20 @@ async function doExecuteTool(
 ): Promise<Pick<ToolResult, 'status' | 'data' | 'error'>> {
   const state = globalState!;
 
-  const cacheKeyValue = cacheKey(ctx, serverAlias, toolName, params);
-  const cached = state.store.getCachedToolCall(cacheKeyValue);
-  if (cached !== undefined) {
-    breaker.recordSuccess();
-    return { status: 'success', data: cached };
+  // Cache is opt-in and read-only: only consult/populate it when the tool's
+  // policy in governance.yaml's cache_policy block says cacheable. Anything
+  // absent from cache_policy (and everything by default) is never cached, so
+  // repeat writes (e.g. github_create_pull_request) always reach the
+  // adapter — this is the C3 fix.
+  const policy = getCachePolicy(state.governance, toolName);
+  const cacheKeyValue = policy.cacheable ? cacheKey(ctx, serverAlias, toolName, params) : undefined;
+
+  if (cacheKeyValue) {
+    const cached = state.store.getCachedToolCall(cacheKeyValue);
+    if (cached !== undefined) {
+      breaker.recordSuccess();
+      return { status: 'success', data: cached };
+    }
   }
 
   const adapter = state.adapters.get(serverAlias);
@@ -253,7 +263,10 @@ async function doExecuteTool(
   try {
     const data = await adapter.callTool(toolName, params);
     breaker.recordSuccess();
-    state.store.setCachedToolCall(cacheKeyValue, data);
+    if (cacheKeyValue) {
+      const ttlMs = (policy.ttlSeconds ?? 0) * 1000;
+      state.store.setCachedToolCall(cacheKeyValue, data, ttlMs);
+    }
     return { status: 'success', data };
   } catch (err) {
     breaker.recordFailure();
@@ -271,6 +284,7 @@ export function createDefaultToolshedState(
       approvalTimeoutMinutes: 15,
       rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
       workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: ['.git/', 'node_modules/', 'secrets/', '.env*'] },
+      cachePolicy: { default: { cacheable: false } },
     },
     breakers: new Map<string, CircuitBreaker>(),
     rateLimiter: createRateLimiter(),

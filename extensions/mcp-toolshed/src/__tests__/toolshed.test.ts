@@ -133,6 +133,7 @@ describe('executeTool', () => {
           approvalTimeoutMinutes: 15,
           rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: { default: { cacheable: false } },
         },
       })
     );
@@ -170,6 +171,7 @@ describe('executeTool', () => {
           approvalTimeoutMinutes: 15,
           rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: { default: { cacheable: false } },
         },
       })
     );
@@ -206,6 +208,7 @@ describe('executeTool', () => {
           approvalTimeoutMinutes: 0.001,
           rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: { default: { cacheable: false } },
         },
       })
     );
@@ -254,11 +257,12 @@ describe('executeTool', () => {
     consoleSpy.mockRestore();
   });
 
-  it('returns cached results', async () => {
+  it('returns cached results for a tool marked cacheable in governance', async () => {
     const store = createMemoryStore();
     store.setCachedToolCall(
       'team-a:code-explorer:github:get_file_contents:{"path":"/repo/readme.md"}',
-      { content: 'cached' }
+      { content: 'cached' },
+      300_000
     );
     initializeToolshed(
       createDefaultToolshedState({
@@ -268,11 +272,46 @@ describe('executeTool', () => {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
         },
+        governance: {
+          destructiveActions: [],
+          approvalTimeoutMinutes: 15,
+          rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
+          workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: {
+            default: { cacheable: false },
+            get_file_contents: { cacheable: true, ttlSeconds: 300 },
+          },
+        },
       })
     );
     const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     expect(result.status).toBe('success');
     expect(result.data).toEqual({ content: 'cached' });
+  });
+
+  it('does not consult the cache for a tool not marked cacheable, even if a stale entry exists', async () => {
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'fresh' }),
+    });
+    const store = createMemoryStore();
+    store.setCachedToolCall(
+      'team-a:code-explorer:github:get_file_contents:{"path":"/repo/readme.md"}',
+      { content: 'stale' },
+      300_000
+    );
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+      })
+    );
+    const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
+    expect(result.status).toBe('success');
+    expect(result.data).toEqual({ content: 'fresh' });
   });
 
   it('returns error for unknown server alias', async () => {
@@ -291,7 +330,41 @@ describe('executeTool', () => {
     expect(result.error).toContain('Unknown MCP server alias');
   });
 
-  it('executes a tool through an adapter and caches the result', async () => {
+  it('executes a tool marked cacheable through an adapter and caches the result', async () => {
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'hello' }),
+    });
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        governance: {
+          destructiveActions: [],
+          approvalTimeoutMinutes: 15,
+          rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
+          workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: {
+            default: { cacheable: false },
+            get_file_contents: { cacheable: true, ttlSeconds: 300 },
+          },
+        },
+      })
+    );
+    const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
+    expect(result.status).toBe('success');
+    expect(result.data).toEqual({ content: 'hello' });
+    const cached = store.getCachedToolCall(
+      'team-a:code-explorer:github:get_file_contents:{"path":"/repo/readme.md"}'
+    );
+    expect(cached).toEqual({ content: 'hello' });
+  });
+
+  it('does not cache a tool that is not marked cacheable', async () => {
     const adapter = createMockAdapter('github', {
       callTool: async () => ({ content: 'hello' }),
     });
@@ -306,13 +379,11 @@ describe('executeTool', () => {
         },
       })
     );
-    const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
-    expect(result.status).toBe('success');
-    expect(result.data).toEqual({ content: 'hello' });
+    await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     const cached = store.getCachedToolCall(
       'team-a:code-explorer:github:get_file_contents:{"path":"/repo/readme.md"}'
     );
-    expect(cached).toEqual({ content: 'hello' });
+    expect(cached).toBeUndefined();
   });
 
   it('handles adapter errors and trips the breaker', async () => {

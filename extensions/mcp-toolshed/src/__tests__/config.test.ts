@@ -7,6 +7,7 @@ import {
   isDestructive,
   isToolAllowed,
   isPathAllowed,
+  getCachePolicy,
 } from '../config.js';
 
 describe('config', () => {
@@ -99,6 +100,12 @@ governance:
       - /workspace
     deny_patterns:
       - .git/
+  cache_policy:
+    default:
+      cacheable: false
+    github_get_pull_request_diff:
+      cacheable: true
+      ttl_seconds: 300
 `
       );
       const config = loadGovernance(governancePath);
@@ -110,6 +117,11 @@ governance:
       expect(isDestructive(config, 'jira', 'transition_issue', { status: 'Open' })).toBe(false);
       expect(isDestructive(config, 'jira', 'transition_issue')).toBe(false);
       expect(isDestructive(config, 'github', 'delete_branch')).toBe(false);
+      expect(config.cachePolicy.github_get_pull_request_diff).toEqual({
+        cacheable: true,
+        ttlSeconds: 300,
+      });
+      expect(config.cachePolicy.default).toEqual({ cacheable: false });
     });
 
     it('loads governance without top-level governance key', () => {
@@ -148,6 +160,53 @@ governance:
       expect(config.rateLimits.default.burst).toBe(20);
       expect(config.rateLimits.slow.requestsPerMinute).toBe(60);
       expect(config.workspaceBoundaries.denyPatterns).toEqual(['.git/', 'node_modules/', 'secrets/', '.env*']);
+    });
+  });
+
+  describe('getCachePolicy', () => {
+    it('returns an explicit per-tool entry over the default', () => {
+      const config = loadGovernance();
+      const withPolicy = {
+        ...config,
+        cachePolicy: {
+          default: { cacheable: false },
+          github_get_pull_request_diff: { cacheable: true, ttlSeconds: 300 },
+        },
+      };
+      expect(getCachePolicy(withPolicy, 'github_get_pull_request_diff')).toEqual({
+        cacheable: true,
+        ttlSeconds: 300,
+      });
+    });
+
+    it('falls back to the default entry for a tool with no explicit policy', () => {
+      const config = loadGovernance();
+      const withPolicy = {
+        ...config,
+        cachePolicy: { default: { cacheable: false } },
+      };
+      expect(getCachePolicy(withPolicy, 'github_create_pull_request')).toEqual({ cacheable: false });
+    });
+
+    it('falls back to non-cacheable when cachePolicy has no default entry at all', () => {
+      const config = loadGovernance();
+      const withPolicy = { ...config, cachePolicy: {} };
+      expect(getCachePolicy(withPolicy, 'anything')).toEqual({ cacheable: false });
+    });
+
+    it('normalizes a cache_policy entry that omits the cacheable key to non-cacheable', () => {
+      const governancePath = path.join(tmpDir, 'governance.yaml');
+      fs.writeFileSync(
+        governancePath,
+        `
+governance:
+  cache_policy:
+    some_tool:
+      ttl_seconds: 60
+`
+      );
+      const config = loadGovernance(governancePath);
+      expect(config.cachePolicy.some_tool).toEqual({ cacheable: false, ttlSeconds: 60 });
     });
   });
 

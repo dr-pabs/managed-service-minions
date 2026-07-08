@@ -11,12 +11,21 @@ export { type SessionStore, type Session, type MinionRun, type PendingApproval, 
 
 const require = createRequire(import.meta.url);
 
-export function createMemoryStore(): SessionStore {
+/** Bounded row cap shared by both store implementations' tool-call cache. */
+const CACHE_MAX_ROWS = 5000;
+
+interface CacheRow {
+  value: unknown;
+  expiresAt: number;
+  insertedAt: number;
+}
+
+export function createMemoryStore(now: () => number = Date.now): SessionStore {
   const sessions = new Map<string, Session>();
   const runs = new Map<string, MinionRun>();
   const approvals = new Map<string, PendingApproval>();
   const auditLog = new Map<string, AuditEntry>();
-  const cache = new Map<string, unknown>();
+  const cache = new Map<string, CacheRow>();
 
   return {
     createSession(session: Session): void {
@@ -75,28 +84,51 @@ export function createMemoryStore(): SessionStore {
       return entries;
     },
     getCachedToolCall(key: string): unknown | undefined {
-      return cache.get(key);
+      const row = cache.get(key);
+      if (!row) return undefined;
+      if (row.expiresAt <= now()) {
+        // Lazy delete on expired read: the row is stale and must never be
+        // served, and there is no benefit to keeping it around.
+        cache.delete(key);
+        return undefined;
+      }
+      return row.value;
     },
-    setCachedToolCall(key: string, value: unknown): void {
-      cache.set(key, value);
+    setCachedToolCall(key: string, value: unknown, ttlMs: number): void {
+      if (!cache.has(key) && cache.size >= CACHE_MAX_ROWS) {
+        // Bounded to CACHE_MAX_ROWS rows; evict the oldest insertion first.
+        let oldestKey: string | undefined;
+        let oldestInsertedAt = Infinity;
+        for (const [k, v] of cache) {
+          if (v.insertedAt < oldestInsertedAt) {
+            oldestInsertedAt = v.insertedAt;
+            oldestKey = k;
+          }
+        }
+        if (oldestKey !== undefined) {
+          cache.delete(oldestKey);
+        }
+      }
+      cache.set(key, { value, expiresAt: now() + ttlMs, insertedAt: now() });
     },
   };
 }
 
 export function createSqliteStore(
   path: string,
-  DatabaseCtor?: new (path: string) => BetterSqlite3Database
+  DatabaseCtor?: new (path: string) => BetterSqlite3Database,
+  now: () => number = Date.now
 ): SessionStore {
   try {
     const Database = DatabaseCtor ?? loadBetterSqlite3();
     const db = new Database(path);
     initializeSchema(db);
-    return createSqliteSessionStore(db);
+    return createSqliteSessionStore(db, now);
   } catch (err) {
     console.warn(
       `[store] SQLite unavailable (${err instanceof Error ? err.message : String(err)}), falling back to memory store`
     );
-    return createMemoryStore();
+    return createMemoryStore(now);
   }
 }
 
@@ -115,6 +147,35 @@ interface BetterSqlite3Statement {
   run(...params: unknown[]): { changes: number };
   get(...params: unknown[]): unknown;
   all(...params: unknown[]): unknown[];
+}
+
+/**
+ * Additive, guarded migration: adds the `expires_at` column to
+ * `tool_call_cache` if it is missing. Guarded by a PRAGMA column-existence
+ * check so re-running this against an existing dev database (created before
+ * this milestone) never fails — CREATE TABLE IF NOT EXISTS alone would leave
+ * a pre-existing table without the new column.
+ */
+function migrateCacheExpiresAtColumn(db: BetterSqlite3Database): void {
+  const columns = db.prepare('PRAGMA table_info(tool_call_cache)').all() as Array<{ name: string }>;
+  const hasExpiresAt = columns.some((column) => column.name === 'expires_at');
+  if (!hasExpiresAt) {
+    db.exec('ALTER TABLE tool_call_cache ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
+/**
+ * Additive, guarded migration: adds the `inserted_at` column to
+ * `tool_call_cache` if it is missing (used to pick the oldest row for
+ * eviction once the 5,000-row cap is reached). Same PRAGMA-guarded pattern
+ * as `migrateCacheExpiresAtColumn`.
+ */
+function migrateCacheInsertedAtColumn(db: BetterSqlite3Database): void {
+  const columns = db.prepare('PRAGMA table_info(tool_call_cache)').all() as Array<{ name: string }>;
+  const hasInsertedAt = columns.some((column) => column.name === 'inserted_at');
+  if (!hasInsertedAt) {
+    db.exec('ALTER TABLE tool_call_cache ADD COLUMN inserted_at INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 function initializeSchema(db: BetterSqlite3Database): void {
@@ -180,12 +241,15 @@ function initializeSchema(db: BetterSqlite3Database): void {
 
     CREATE TABLE IF NOT EXISTS tool_call_cache (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      inserted_at INTEGER NOT NULL DEFAULT 0
     );
   `);
+  migrateCacheExpiresAtColumn(db);
+  migrateCacheInsertedAtColumn(db);
 }
 
-function createSqliteSessionStore(db: BetterSqlite3Database): SessionStore {
+function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number): SessionStore {
   const insertSession = db.prepare(
     `INSERT INTO sessions (id, team_id, platform, user_id, correlation_root, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -213,8 +277,15 @@ function createSqliteSessionStore(db: BetterSqlite3Database): SessionStore {
   );
   const selectAuditEntries = db.prepare('SELECT * FROM audit_log ORDER BY timestamp DESC');
   const selectAuditEntriesByCorrelation = db.prepare('SELECT * FROM audit_log WHERE correlation_id = ? ORDER BY timestamp DESC');
-  const selectCache = db.prepare('SELECT value FROM tool_call_cache WHERE key = ?');
-  const insertCache = db.prepare('INSERT OR REPLACE INTO tool_call_cache (key, value) VALUES (?, ?)');
+  const selectCache = db.prepare('SELECT value, expires_at FROM tool_call_cache WHERE key = ?');
+  const deleteCache = db.prepare('DELETE FROM tool_call_cache WHERE key = ?');
+  const insertCache = db.prepare(
+    'INSERT OR REPLACE INTO tool_call_cache (key, value, expires_at, inserted_at) VALUES (?, ?, ?, ?)'
+  );
+  const countCache = db.prepare('SELECT COUNT(*) as count FROM tool_call_cache');
+  const selectOldestCacheKey = db.prepare(
+    'SELECT key FROM tool_call_cache ORDER BY inserted_at ASC LIMIT 1'
+  );
 
   return {
     createSession(session: Session): void {
@@ -322,16 +393,30 @@ function createSqliteSessionStore(db: BetterSqlite3Database): SessionStore {
       return slice.map(rowToAuditEntry);
     },
     getCachedToolCall(key: string): unknown | undefined {
-      const row = selectCache.get(key) as { value: string } | undefined;
+      const row = selectCache.get(key) as { value: string; expires_at: number } | undefined;
       if (!row) return undefined;
+      if (row.expires_at <= now()) {
+        // Lazy delete on expired read.
+        deleteCache.run(key);
+        return undefined;
+      }
       try {
         return JSON.parse(row.value);
       } catch {
         return undefined;
       }
     },
-    setCachedToolCall(key: string, value: unknown): void {
-      insertCache.run(key, JSON.stringify(value));
+    setCachedToolCall(key: string, value: unknown, ttlMs: number): void {
+      const { count } = countCache.get() as { count: number };
+      const isNewKey = (selectCache.get(key) as { value: string } | undefined) === undefined;
+      if (isNewKey && count >= CACHE_MAX_ROWS) {
+        // Bounded to CACHE_MAX_ROWS rows; evict the oldest insertion first.
+        const oldest = selectOldestCacheKey.get() as { key: string } | undefined;
+        if (oldest) {
+          deleteCache.run(oldest.key);
+        }
+      }
+      insertCache.run(key, JSON.stringify(value), now() + ttlMs, now());
     },
   };
 }

@@ -17,7 +17,11 @@ function createStatement(overrides: Partial<Statement> = {}): Statement {
   return {
     run: jest.fn() as unknown as Statement['run'],
     get: jest.fn().mockReturnValue(undefined) as unknown as Statement['get'],
-    all: jest.fn() as unknown as Statement['all'],
+    // Defaults to [] (not undefined) because store.ts's PRAGMA table_info
+    // migration guard calls `.some(...)` on every `all()` result, including
+    // this shared default statement used for CREATE TABLE/PRAGMA calls in
+    // most of these hand-mocked tests.
+    all: jest.fn().mockReturnValue([]) as unknown as Statement['all'],
     ...overrides,
   };
 }
@@ -80,9 +84,46 @@ describe('store', () => {
 
     it('caches tool calls', () => {
       const store = createMemoryStore();
-      store.setCachedToolCall('key', { value: 42 });
+      store.setCachedToolCall('key', { value: 42 }, 60_000);
       expect(store.getCachedToolCall('key')).toEqual({ value: 42 });
       expect(store.getCachedToolCall('missing')).toBeUndefined();
+    });
+
+    it('expires a cached tool call past its TTL using the injected clock', () => {
+      let now = 1000;
+      const store = createMemoryStore(() => now);
+      store.setCachedToolCall('key', { value: 42 }, 1000);
+      expect(store.getCachedToolCall('key')).toEqual({ value: 42 });
+      now += 1001;
+      expect(store.getCachedToolCall('key')).toBeUndefined();
+    });
+
+    it('evicts the oldest entry once the 5,000-row cap is reached', () => {
+      let now = 0;
+      const store = createMemoryStore(() => now);
+      for (let i = 0; i < 5000; i++) {
+        now += 1;
+        store.setCachedToolCall(`key-${i}`, i, 60_000_000);
+      }
+      expect(store.getCachedToolCall('key-0')).toBe(0);
+      now += 1;
+      store.setCachedToolCall('key-5000', 5000, 60_000_000);
+      // The oldest entry (key-0) must have been evicted to make room.
+      expect(store.getCachedToolCall('key-0')).toBeUndefined();
+      expect(store.getCachedToolCall('key-5000')).toBe(5000);
+    });
+
+    it('does not evict when overwriting an existing key at the cap', () => {
+      let now = 0;
+      const store = createMemoryStore(() => now);
+      for (let i = 0; i < 5000; i++) {
+        now += 1;
+        store.setCachedToolCall(`key-${i}`, i, 60_000_000);
+      }
+      now += 1;
+      store.setCachedToolCall('key-0', 'updated', 60_000_000);
+      expect(store.getCachedToolCall('key-0')).toBe('updated');
+      expect(store.getCachedToolCall('key-1')).toBe(1);
     });
 
     it('stores and lists audit entries', () => {
@@ -169,7 +210,7 @@ describe('store', () => {
       const prepared = createStatement({
         get: jest.fn().mockImplementation(
           ((id: string) => {
-            if (id === 'key') return { value: JSON.stringify({ value: 42 }) };
+            if (id === 'key') return { value: JSON.stringify({ value: 42 }), expires_at: Number.MAX_SAFE_INTEGER };
             return {
               id: 's1',
               team_id: 'team-a',
@@ -220,7 +261,7 @@ describe('store', () => {
         timeoutAt: 2,
       });
       store.resolveApproval('a1', 'approved');
-      store.setCachedToolCall('key', { value: 42 });
+      store.setCachedToolCall('key', { value: 42 }, 60_000);
       expect(store.getCachedToolCall('key')).toEqual({ value: 42 });
 
       expect(db.exec).toHaveBeenCalled();
@@ -362,6 +403,126 @@ describe('store', () => {
 
       const store = createSqliteStore(':memory:', DatabaseCtor);
       expect(store.getCachedToolCall('key')).toBeUndefined();
+    });
+
+    describe('tool_call_cache real SQL semantics (fake in-memory engine)', () => {
+      // A tiny fake SQL engine that understands only the handful of
+      // statements store.ts issues against tool_call_cache and the
+      // sessions/... tables it CREATEs at startup. This exercises the real
+      // expiry/eviction/migration *logic* in store.ts (lazy delete, 5,000-row
+      // cap, PRAGMA-guarded ALTER TABLE) without depending on the native
+      // better-sqlite3 binding being compiled in every CI environment, same
+      // spirit as the hand-rolled `createStatement` mocks used throughout
+      // this file.
+      interface CacheRow {
+        key: string;
+        value: string;
+        expires_at: number;
+        inserted_at: number;
+      }
+
+      function createFakeDatabaseCtor(preExistingColumns: string[] = ['key', 'value']) {
+        const cacheTable = new Map<string, CacheRow>();
+        const columns = [...preExistingColumns];
+
+        const FakeDatabase = jest.fn().mockImplementation(() => ({
+          exec: jest.fn((_sql: string) => {
+            // CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN handling.
+            if (/ALTER TABLE tool_call_cache ADD COLUMN (\w+)/.test(_sql)) {
+              const match = /ADD COLUMN (\w+)/.exec(_sql);
+              if (match && !columns.includes(match[1])) {
+                columns.push(match[1]);
+                for (const row of cacheTable.values()) {
+                  (row as unknown as Record<string, unknown>)[match[1]] = 0;
+                }
+              }
+            }
+          }),
+          prepare: jest.fn((sql: string) => ({
+            run: jest.fn((...params: unknown[]) => {
+              if (sql.startsWith('INSERT OR REPLACE INTO tool_call_cache')) {
+                const [key, value, expires_at, inserted_at] = params as [string, string, number, number];
+                cacheTable.set(key, { key, value, expires_at, inserted_at });
+              } else if (sql.startsWith('DELETE FROM tool_call_cache')) {
+                const [key] = params as [string];
+                cacheTable.delete(key);
+              }
+              return { changes: 1 };
+            }),
+            get: jest.fn((...params: unknown[]) => {
+              if (sql === 'PRAGMA table_info(tool_call_cache)') {
+                return undefined;
+              }
+              if (sql.startsWith('SELECT value, expires_at FROM tool_call_cache')) {
+                const [key] = params as [string];
+                const row = cacheTable.get(key);
+                return row ? { value: row.value, expires_at: row.expires_at } : undefined;
+              }
+              if (sql.startsWith('SELECT COUNT(*)')) {
+                return { count: cacheTable.size };
+              }
+              if (sql.startsWith('SELECT key FROM tool_call_cache ORDER BY inserted_at ASC')) {
+                let oldest: CacheRow | undefined;
+                for (const row of cacheTable.values()) {
+                  if (!oldest || row.inserted_at < oldest.inserted_at) oldest = row;
+                }
+                return oldest ? { key: oldest.key } : undefined;
+              }
+              return undefined;
+            }),
+            all: jest.fn((_sql: string) => {
+              if (sql === 'PRAGMA table_info(tool_call_cache)') {
+                return columns.map((name) => ({ name }));
+              }
+              return [];
+            }),
+          })),
+          close: jest.fn(),
+        }));
+        return { FakeDatabase, cacheTable };
+      }
+
+      it('expires a cached tool call past its TTL using the injected clock (lazy delete on read)', () => {
+        const { FakeDatabase } = createFakeDatabaseCtor(['key', 'value', 'expires_at', 'inserted_at']);
+        let now = 1000;
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor, () => now);
+        store.setCachedToolCall('key', { value: 42 }, 1000);
+        expect(store.getCachedToolCall('key')).toEqual({ value: 42 });
+        now += 1001;
+        expect(store.getCachedToolCall('key')).toBeUndefined();
+      });
+
+      it('evicts the oldest row once the 5,000-row cap is reached', () => {
+        const { FakeDatabase, cacheTable } = createFakeDatabaseCtor(['key', 'value', 'expires_at', 'inserted_at']);
+        let now = 0;
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor, () => now);
+        for (let i = 0; i < 5000; i++) {
+          now += 1;
+          store.setCachedToolCall(`key-${i}`, i, 60_000_000);
+        }
+        expect(cacheTable.size).toBe(5000);
+        now += 1;
+        store.setCachedToolCall('key-5000', 5000, 60_000_000);
+        expect(cacheTable.size).toBe(5000);
+        expect(store.getCachedToolCall('key-0')).toBeUndefined();
+        expect(store.getCachedToolCall('key-5000')).toBe(5000);
+      });
+
+      it('runs the additive expires_at/inserted_at migration when the columns are missing on an existing table', () => {
+        const { FakeDatabase } = createFakeDatabaseCtor(['key', 'value']);
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        // If the migration didn't run, setCachedToolCall's INSERT with
+        // expires_at/inserted_at values would be operating against a schema
+        // that (in a real DB) lacks those columns; here we assert the store
+        // still works end-to-end post-migration.
+        store.setCachedToolCall('key', { value: 1 }, 60_000);
+        expect(store.getCachedToolCall('key')).toEqual({ value: 1 });
+      });
+
+      it('is a no-op migration when expires_at/inserted_at already exist (re-running against an existing dev DB is safe)', () => {
+        const { FakeDatabase } = createFakeDatabaseCtor(['key', 'value', 'expires_at', 'inserted_at']);
+        expect(() => createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor)).not.toThrow();
+      });
     });
 
     it('lists sessions', () => {

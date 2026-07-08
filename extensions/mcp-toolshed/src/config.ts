@@ -25,6 +25,7 @@ export interface GovernanceConfig {
     allowedBasePaths: string[];
     denyPatterns: string[];
   };
+  cachePolicy: Record<string, { cacheable: boolean; ttlSeconds?: number }>;
 }
 
 const defaultAllowlists: AllowlistConfig = {
@@ -41,6 +42,9 @@ const defaultGovernance: GovernanceConfig = {
   workspaceBoundaries: {
     allowedBasePaths: ['/repo'],
     denyPatterns: ['.git/', 'node_modules/', 'secrets/', '.env*'],
+  },
+  cachePolicy: {
+    default: { cacheable: false },
   },
 };
 
@@ -94,6 +98,21 @@ function normalizeGovernance(raw: unknown): GovernanceConfig {
     deny_patterns?: string[];
   };
 
+  const rawCachePolicy = (data?.cache_policy ?? {}) as Record<
+    string,
+    { cacheable?: boolean; ttl_seconds?: number }
+  >;
+  const cachePolicy: GovernanceConfig['cachePolicy'] = {};
+  for (const [key, value] of Object.entries(rawCachePolicy)) {
+    cachePolicy[key] = {
+      cacheable: value.cacheable ?? false,
+      ttlSeconds: value.ttl_seconds,
+    };
+  }
+  if (!cachePolicy.default) {
+    cachePolicy.default = { cacheable: false };
+  }
+
   return {
     destructiveActions,
     approvalTimeoutMinutes: (data?.approval_timeout_minutes as number) ?? 15,
@@ -102,6 +121,7 @@ function normalizeGovernance(raw: unknown): GovernanceConfig {
       allowedBasePaths: rawBoundaries.allowed_base_paths ?? ['/repo'],
       denyPatterns: rawBoundaries.deny_patterns ?? ['.git/', 'node_modules/', 'secrets/', '.env*'],
     },
+    cachePolicy,
   };
 }
 
@@ -139,6 +159,21 @@ export function isDestructive(
     }
     return Object.entries(action.params).every(([key, value]) => params[key] === value);
   });
+}
+
+/**
+ * Resolves the cache policy for a tool: an explicit per-tool entry wins,
+ * otherwise falls back to `cache_policy.default` (or the hard-coded
+ * non-cacheable default if the config omits `default` entirely). Caching is
+ * opt-in — an unrecognized tool is never cacheable.
+ */
+export function getCachePolicy(
+  governance: GovernanceConfig,
+  toolName: string
+): { cacheable: boolean; ttlSeconds?: number } {
+  return (
+    governance.cachePolicy[toolName] ?? governance.cachePolicy.default ?? { cacheable: false }
+  );
 }
 
 export function isToolAllowed(

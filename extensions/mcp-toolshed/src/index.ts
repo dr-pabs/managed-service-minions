@@ -24,6 +24,7 @@ export {
   isDestructive,
   isToolAllowed,
   isPathAllowed,
+  getCachePolicy,
   type AllowlistConfig,
   type GovernanceConfig,
 } from './config.js';
