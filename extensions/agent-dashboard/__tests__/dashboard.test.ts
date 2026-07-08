@@ -141,6 +141,7 @@ describe('startDashboardServer', () => {
     store.createApproval({
       id: 'a1',
       sessionId: 's1',
+      teamId: 'team-a',
       correlationId: 'corr_1',
       serverAlias: 'github',
       toolName: 'github_merge_pull_request',

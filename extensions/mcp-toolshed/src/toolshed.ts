@@ -506,7 +506,11 @@ async function gateDestructiveCall(
   const approvalId = `appr_${ctx.correlationId}_${serverAlias}_${toolName}_${requestedAt}_${randomUUID()}`;
   const approval: PendingApproval = {
     id: approvalId,
-    sessionId: ctx.teamId,
+    // M4 fix: sessionId is the verified token's session (ctx.sessionId), NOT
+    // ctx.teamId — the pre-M4 code conflated the two. teamId is now its own
+    // distinct field on PendingApproval (see framework-core's store.ts).
+    sessionId: ctx.sessionId,
+    teamId: ctx.teamId,
     correlationId: ctx.correlationId,
     serverAlias,
     toolName,

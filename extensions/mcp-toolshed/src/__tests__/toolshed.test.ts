@@ -362,6 +362,24 @@ describe('executeTool', () => {
       expect(notified).toHaveLength(1);
     });
 
+    it('M4: created approval sessionId equals ctx.sessionId (the token session) and teamId is its own field equal to ctx.teamId', async () => {
+      // ctx.teamId and ctx.sessionId are deliberately DIFFERENT values here
+      // (unlike the verified-token path where they currently coincide) to
+      // prove the exact field-to-field mapping M4 requires: before the fix,
+      // PendingApproval.sessionId was set to ctx.teamId — a straight
+      // substitution of teamId for sessionId would pass a same-value test
+      // incidentally without actually fixing the bug.
+      const store = createMemoryStore();
+      const distinctCtx = { ...baseCtx, teamId: 'team-distinct', sessionId: 'sess-distinct' };
+      initializeToolshed(destructiveState({ store }));
+
+      const result = await executeTool(distinctCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const approval = store.getApproval(result.approvalId!);
+      expect(approval).toBeDefined();
+      expect(approval!.sessionId).toBe('sess-distinct');
+      expect(approval!.teamId).toBe('team-distinct');
+    });
+
     it('resubmit-after-approve executes exactly once and marks the record consumed', async () => {
       const adapter = createMockAdapter('github', {
         callTool: jest.fn(async () => ({ merged: true })) as never,

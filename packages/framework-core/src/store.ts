@@ -22,7 +22,18 @@ export interface MinionRun {
 
 export interface PendingApproval {
   id: string;
+  /**
+   * The verified minion token's sessionId (Milestone 6, M4 fix) — NOT the
+   * team. Before M4 this field was mistakenly populated with `ctx.teamId`;
+   * `teamId` below is now its own distinct field.
+   */
   sessionId: string;
+  /**
+   * The team that owns this approval, derived from the verified token
+   * (Milestone 6, M4). Added as its own field so `sessionId` above can hold
+   * the actual session identity instead of being overloaded with the team.
+   */
+  teamId: string;
   correlationId: string;
   serverAlias: string;
   toolName: string;

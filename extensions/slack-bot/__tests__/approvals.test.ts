@@ -16,6 +16,7 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
   return {
     id: 'appr_1',
     sessionId: 's1',
+    teamId: 'team-a',
     correlationId: 'corr_1',
     serverAlias: 'github',
     toolName: 'merge_pull_request',

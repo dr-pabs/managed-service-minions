@@ -83,6 +83,26 @@ describe('store', () => {
       store.resolveApproval('missing', 'denied');
     });
 
+    it('M4: teamId is its own field, distinct from sessionId, and round-trips through the memory store', () => {
+      const store = createMemoryStore();
+      const approval: PendingApproval = {
+        id: 'a1-teamid',
+        sessionId: 'sess-distinct',
+        teamId: 'team-distinct',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 1,
+        timeoutAt: 2,
+        requestHash: 'hash_teamid',
+      };
+      store.createApproval(approval);
+      const retrieved = store.getApproval('a1-teamid');
+      expect(retrieved?.sessionId).toBe('sess-distinct');
+      expect(retrieved?.teamId).toBe('team-distinct');
+    });
+
     it('records the operator identity that resolved an approval (Milestone 3)', () => {
       const store = createMemoryStore();
       const approval: PendingApproval = {
@@ -462,6 +482,62 @@ describe('store', () => {
       const store = createSqliteStore(':memory:', DatabaseCtor);
       store.resolveApproval('a1', 'denied');
       expect(prepared.run).toHaveBeenCalledWith('denied', expect.any(Number), null, null, 'a1');
+    });
+
+    it('M4: passes teamId to the insert statement in its own column, and maps team_id back on read', () => {
+      const prepared = createStatement();
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+
+      store.createApproval({
+        id: 'a-teamid',
+        sessionId: 'sess-distinct',
+        teamId: 'team-distinct',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 1,
+        timeoutAt: 2,
+        requestHash: 'hash_teamid',
+      });
+      expect(prepared.run).toHaveBeenCalledWith(
+        'a-teamid',
+        'sess-distinct',
+        'team-distinct',
+        'corr_1',
+        'github',
+        'merge_pull_request',
+        '{}',
+        1,
+        2,
+        null,
+        null,
+        null,
+        null,
+        'hash_teamid',
+        null
+      );
+
+      (prepared.get as jest.Mock).mockReturnValue({
+        id: 'a-teamid',
+        session_id: 'sess-distinct',
+        team_id: 'team-distinct',
+        correlation_id: 'corr_1',
+        server_alias: 'github',
+        tool_name: 'merge_pull_request',
+        params_json: '{}',
+        requested_at: 1,
+        timeout_at: 2,
+      });
+      const retrieved = store.getApproval('a-teamid');
+      expect(retrieved?.sessionId).toBe('sess-distinct');
+      expect(retrieved?.teamId).toBe('team-distinct');
     });
 
     it('retrieves an approval from sqlite', () => {

@@ -263,6 +263,26 @@ function migrateApprovalRequestHashColumns(db: BetterSqlite3Database): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_pending_approvals_request_hash ON pending_approvals (request_hash)');
 }
 
+/**
+ * Additive, guarded migration: adds `team_id` to `pending_approvals` if
+ * missing (Milestone 6, M4 fix — `PendingApproval.sessionId` was mistakenly
+ * set to `ctx.teamId`; `teamId` is now its own distinct field, coordinated
+ * with the existing approver/request-hash migrations rather than clobbering
+ * them). Same PRAGMA-guarded pattern as the other migrations in this file.
+ * `team_id` cannot be `NOT NULL` without a backfill for pre-existing rows
+ * (a pre-M4-fix row's `session_id` actually held the team, but blindly
+ * copying it over would misrepresent history as if it had always been a
+ * distinct field), so it defaults to `''` — pre-existing rows simply read
+ * back with an empty `teamId`, matching the same "old rows are inert with
+ * respect to the new field" precedent `request_hash`'s migration set.
+ */
+function migrateApprovalTeamIdColumn(db: BetterSqlite3Database): void {
+  const columns = db.prepare('PRAGMA table_info(pending_approvals)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'team_id')) {
+    db.exec("ALTER TABLE pending_approvals ADD COLUMN team_id TEXT NOT NULL DEFAULT ''");
+  }
+}
+
 function initializeSchema(db: BetterSqlite3Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -336,6 +356,7 @@ function initializeSchema(db: BetterSqlite3Database): void {
   migrateCacheInsertedAtColumn(db);
   migrateApprovalApproverColumns(db);
   migrateApprovalRequestHashColumns(db);
+  migrateApprovalTeamIdColumn(db);
 }
 
 function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number): SessionStore {
@@ -354,8 +375,8 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
   const selectRunsByCorrelation = db.prepare('SELECT * FROM minion_runs WHERE correlation_id = ?');
   const updateRun = db.prepare('UPDATE minion_runs SET status = ?, result_json = ?, tokens_used = ?, completed_at = ? WHERE id = ?');
   const insertApproval = db.prepare(
-    `INSERT INTO pending_approvals (id, session_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at, approver_kind, approver_id, request_hash, consumed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO pending_approvals (id, session_id, team_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at, approver_kind, approver_id, request_hash, consumed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const selectApproval = db.prepare('SELECT * FROM pending_approvals WHERE id = ?');
   const selectApprovalsByRequestHash = db.prepare(
@@ -438,6 +459,7 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
       insertApproval.run(
         approval.id,
         approval.sessionId,
+        approval.teamId,
         approval.correlationId,
         approval.serverAlias,
         approval.toolName,
@@ -561,6 +583,7 @@ function rowToApproval(row: Record<string, unknown>): PendingApproval {
   return {
     id: String(row.id),
     sessionId: String(row.session_id),
+    teamId: String(row.team_id ?? ''),
     correlationId: String(row.correlation_id),
     serverAlias: String(row.server_alias),
     toolName: String(row.tool_name),
