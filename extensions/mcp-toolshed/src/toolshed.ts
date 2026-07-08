@@ -7,6 +7,7 @@ import {
   getCachePolicy,
   isDestructive,
   isPathAllowed,
+  isShellCommandAllowed,
   isToolAllowed,
 } from './config.js';
 import { CircuitBreaker, type CircuitBreakerConfig } from './circuit-breaker.js';
@@ -364,6 +365,22 @@ export async function executeTool(
     });
   }
 
+  // Shell governance (H2/F5) runs BEFORE path scope, per the pinned
+  // enforcement order (allowlist -> shell-command check -> path scope ->
+  // rate limit -> ... -> cache-aware adapter call). Only shell.execute calls
+  // carry a raw command string to check; every other tool/server passes
+  // through unaffected.
+  if (serverAlias === 'shell' && toolName === 'execute') {
+    const command = typeof paramsRecord?.command === 'string' ? paramsRecord.command : '';
+    const shellCheck = isShellCommandAllowed(toolshedState.allowlists, ctx.minionType, command);
+    if (!shellCheck.allowed) {
+      return emit({
+        status: 'blocked_by_allowlist',
+        error: shellCheck.reason,
+      });
+    }
+  }
+
   const pathCheck = isPathAllowed(toolshedState.allowlists, toolshedState.governance, ctx.minionType, toolName, paramsRecord);
   if (!pathCheck.allowed) {
     return emit({
@@ -540,13 +557,14 @@ export function createDefaultToolshedState(
   overrides: Partial<ToolshedState> & Pick<ToolshedState, 'store' | 'adapters'>
 ): ToolshedState {
   return {
-    allowlists: { allowlists: {}, pathScopes: {} },
+    allowlists: { allowlists: {}, pathScopes: {}, shellCommands: {} },
     governance: {
       destructiveActions: [],
       approvalTimeoutMinutes: 15,
       rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
       workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: ['.git/', 'node_modules/', 'secrets/', '.env*'] },
       cachePolicy: { default: { cacheable: false } },
+      pathCheckedTools: {},
     },
     breakers: new Map<string, CircuitBreaker>(),
     rateLimiter: createRateLimiter(),

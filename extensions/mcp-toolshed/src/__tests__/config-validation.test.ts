@@ -316,6 +316,37 @@ describe('validateConfigAtRoot against fixture trees', () => {
     expect(result.errors.some((e) => e.includes('jira_get_issue') && e.includes('cacheable'))).toBe(true);
   });
 
+  it('(g) reports a path_checked_tools tool name absent from every server in the registry', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'governance.yaml'),
+      ['governance:', '  destructive_actions: []', '  path_checked_tools:', '    delete_everything:', '      - path'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(
+      result.errors.some((e) => e.includes('delete_everything') && e.includes('path_checked_tools'))
+    ).toBe(true);
+  });
+
+  it('(g) passes when a path_checked_tools tool name appears under some registry server alias (e.g. shell.execute)', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'tool-registry.yaml'),
+      ['registry:', '  jira:', '    - jira_get_issue', '  shell:', '    - execute'].join('\n')
+    );
+    writeFile(
+      path.join(tmpDir, 'rules', 'governance.yaml'),
+      ['governance:', '  destructive_actions: []', '  path_checked_tools:', '    execute:', '      - cwd'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(result.errors.some((e) => e.includes('path_checked_tools'))).toBe(false);
+  });
+
+  it('(g) passes against the real, shipped rules/governance.yaml path_checked_tools (execute + the five filesystem tools)', () => {
+    const result = validateConfigAtRoot(REPO_ROOT);
+    expect(result.errors.some((e) => e.includes('path_checked_tools'))).toBe(false);
+  });
+
   it('prints file and key information in every error message', () => {
     seedMinimalValidTree(tmpDir);
     writeFile(

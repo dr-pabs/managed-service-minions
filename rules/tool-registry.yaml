@@ -15,9 +15,18 @@
 #                   runtime (via TOOLSHED_ADAPTERS), and rules/allowlists.yaml
 #                   already grants code_writer/test_writer the tool
 #                   "execute" under that alias. There is no server.ts to
-#                   transcribe from yet (Milestone 5 formalizes shell command
-#                   governance); until then this entry documents the one tool
-#                   name the allowlists file actually uses.
+#                   transcribe from (Milestone 5 formalized shell command
+#                   governance on top of this virtual entry).
+#   filesystem   -> no extensions/mcp-filesystem package exists either. Like
+#                   "shell", "filesystem" is a virtual server alias reserved
+#                   for a future in-process or sandboxed file-access adapter.
+#                   No allowlist currently grants any minion a filesystem.*
+#                   tool, and no adapter is registered under this alias at
+#                   runtime; the five tool names below exist here solely so
+#                   rules/governance.yaml's path_checked_tools (Milestone 5,
+#                   H1) has a real registry entry to validate against instead
+#                   of referencing tool names that appear nowhere else in the
+#                   config tree.
 
 registry:
   github:
@@ -48,3 +57,9 @@ registry:
     - jira_add_comment
   shell:
     - execute
+  filesystem:
+    - read_file
+    - list_directory
+    - search_files
+    - write_file
+    - edit_file

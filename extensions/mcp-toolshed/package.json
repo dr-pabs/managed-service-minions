@@ -16,7 +16,8 @@
     "@azure/storage-blob": "^12.27.0",
     "@modelcontextprotocol/sdk": "^1.15.0",
     "better-sqlite3": "^12.4.0",
-    "framework-core": "workspace:*"
+    "framework-core": "workspace:*",
+    "picomatch": "^4.0.5"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
@@ -24,6 +25,7 @@
     "@types/jest": "^29.5.14",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.15.17",
+    "@types/picomatch": "^4.0.3",
     "js-yaml": "^4.1.0",
     "ts-jest": "^29.4.11",
     "typescript": "^5.8.3"

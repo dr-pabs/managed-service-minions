@@ -106,6 +106,7 @@ export function validateConfigAtRoot(repoRoot: string): ValidationResult {
     tool_name?: string;
   }>;
   const cachePolicy = (governance.cache_policy ?? {}) as Record<string, { cacheable?: boolean }>;
+  const pathCheckedTools = (governance.path_checked_tools ?? {}) as Record<string, string[]>;
 
   const registryRaw = loadYamlFile(registryPath);
   const registry = (registryRaw.registry ?? {}) as Record<string, string[]>;
@@ -188,6 +189,21 @@ export function validateConfigAtRoot(repoRoot: string): ValidationResult {
     if (!toolName || !registry[serverAlias].includes(toolName)) {
       errors.push(
         `ERROR rules/governance.yaml: destructive_actions entry names tool "${toolName}" for server "${serverAlias}", which is absent from rules/tool-registry.yaml`
+      );
+    }
+  }
+
+  // (g) every path_checked_tools tool name (Milestone 5, H1) exists under
+  // SOME server alias in the tool registry -- path_checked_tools has no
+  // server_alias of its own (it is keyed by tool name only, since the same
+  // toolshed pipeline step runs regardless of which server the tool belongs
+  // to), so this checks the flattened set of every registered tool name
+  // across every alias, rather than a single alias like checks (d)/(e) do.
+  const allRegisteredToolNames = new Set(Object.values(registry).flat());
+  for (const toolName of Object.keys(pathCheckedTools)) {
+    if (!allRegisteredToolNames.has(toolName)) {
+      errors.push(
+        `ERROR rules/governance.yaml: path_checked_tools names tool "${toolName}", which is absent from rules/tool-registry.yaml under any server alias`
       );
     }
   }

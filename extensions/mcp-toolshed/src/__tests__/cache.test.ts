@@ -40,6 +40,7 @@ describe('cache policy (C3 / F4)', () => {
         allowlists: {
           allowlists: { pr_create: { github: ['github_get_pull_request'] } },
           pathScopes: {},
+          shellCommands: {},
         },
         governance: {
           destructiveActions: [],
@@ -47,6 +48,7 @@ describe('cache policy (C3 / F4)', () => {
           rateLimits: { default: { requestsPerMinute: 6000, burst: 6000 } },
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
           cachePolicy: { default: { cacheable: false } },
+          pathCheckedTools: {},
         },
       })
     );
@@ -74,6 +76,7 @@ describe('cache policy (C3 / F4)', () => {
         allowlists: {
           allowlists: { pr_create: { github: ['github_create_pull_request'] } },
           pathScopes: {},
+          shellCommands: {},
         },
         governance: {
           destructiveActions: [],
@@ -81,6 +84,7 @@ describe('cache policy (C3 / F4)', () => {
           rateLimits: { default: { requestsPerMinute: 6000, burst: 6000 } },
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
           cachePolicy: { default: { cacheable: false } },
+          pathCheckedTools: {},
         },
       })
     );
@@ -115,6 +119,7 @@ describe('cache policy (C3 / F4)', () => {
         allowlists: {
           allowlists: { pr_create: { github: ['github_get_pull_request_diff'] } },
           pathScopes: {},
+          shellCommands: {},
         },
         governance: {
           destructiveActions: [],
@@ -125,6 +130,7 @@ describe('cache policy (C3 / F4)', () => {
             default: { cacheable: false },
             github_get_pull_request_diff: { cacheable: true, ttlSeconds: 300 },
           },
+          pathCheckedTools: {},
         },
       })
     );
@@ -161,6 +167,7 @@ describe('cache policy (C3 / F4)', () => {
         allowlists: {
           allowlists: { pr_create: { github: ['github_get_pull_request_diff'] } },
           pathScopes: {},
+          shellCommands: {},
         },
         governance: {
           destructiveActions: [],
@@ -171,6 +178,7 @@ describe('cache policy (C3 / F4)', () => {
             default: { cacheable: false },
             github_get_pull_request_diff: { cacheable: true },
           },
+          pathCheckedTools: {},
         },
       })
     );

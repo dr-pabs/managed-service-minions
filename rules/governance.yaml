@@ -34,8 +34,30 @@ governance:
     deny_patterns:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
+
+  # Path scope hardening (H1/M5): tool name -> list of param keys whose value
+  # is a filesystem path that isPathAllowed must check. Every listed key
+  # present on a call is checked (not just the first one found), so a tool
+  # that accepts more than one path-like param (none do yet) can never smuggle
+  # an unchecked one through. Replaces the old hardcoded five-tool
+  # `serverAliasForTool` list in extensions/mcp-toolshed/src/config.ts.
+  # `execute` (the virtual shell.execute tool) is checked on `cwd` so a
+  # minion cannot escape its sandbox by spawning a shell rooted elsewhere.
+  path_checked_tools:
+    read_file:
+      - path
+    list_directory:
+      - directory_path
+    search_files:
+      - search_path
+    write_file:
+      - path
+    edit_file:
+      - path
+    execute:
+      - cwd
 
   fallback_behavior:
     on_allowlist_block: escalate_and_terminate

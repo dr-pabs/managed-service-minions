@@ -26,6 +26,7 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
       })
     );
@@ -58,6 +59,7 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
         governance: {
           destructiveActions: [],
@@ -68,6 +70,7 @@ describe('toolshed integration', () => {
             default: { cacheable: false },
             get_file_contents: { cacheable: true, ttlSeconds: 300 },
           },
+          pathCheckedTools: {},
         },
       })
     );
@@ -95,6 +98,7 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
       })
     );
@@ -116,6 +120,7 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
       })
     );

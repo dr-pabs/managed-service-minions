@@ -58,8 +58,9 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
-    # shell.execute has no command-pattern allowlist; enforcement is prompt-level only.
-    # Accepted risk: agents run inside the /repo sandbox; prompt restricts usage to test/lint commands.
+    # shell.execute is now governed by the shell_commands block below (H2/F5):
+    # command-pattern allow/deny is enforced by the toolshed itself, not left
+    # to prompt-level convention alone. See shell_commands.code_writer.
     shell:
       - execute
   test_writer:
@@ -69,7 +70,7 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
-    # Same accepted risk as code_writer — shell.execute restricted to test-runner commands by prompt.
+    # See shell_commands.test_writer below (H2/F5).
     shell:
       - execute
 
@@ -81,7 +82,7 @@ path_scopes:
     deny:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
   code_reviewer: *repo-path-scope
   pr_create: *repo-path-scope
@@ -99,5 +100,44 @@ path_scopes:
     deny:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
+
+# Shell command governance (H2/F5): per-minion allow/deny glob lists matched
+# against the trimmed command string by extensions/mcp-toolshed/src/config.ts
+# isShellCommandAllowed. Deny always wins over allow. A minion with NO entry
+# here has shell access denied entirely -- there is no implicit allow, and no
+# minion other than code_writer/test_writer is granted shell.execute above.
+shell_commands:
+  code_writer:
+    allow:
+      - "pnpm *"
+      - "npm test*"
+      - "npx jest*"
+      - "git diff*"
+      - "git status"
+      - "git log*"
+    deny:
+      - "* | *"
+      - "*curl*"
+      - "*wget*"
+      - "*ssh*"
+      - "git push*"
+      - "rm -rf*"
+      - "*>*"
+  test_writer:
+    allow:
+      - "pnpm *"
+      - "npm test*"
+      - "npx jest*"
+      - "git diff*"
+      - "git status"
+      - "git log*"
+    deny:
+      - "* | *"
+      - "*curl*"
+      - "*wget*"
+      - "*ssh*"
+      - "git push*"
+      - "rm -rf*"
+      - "*>*"
