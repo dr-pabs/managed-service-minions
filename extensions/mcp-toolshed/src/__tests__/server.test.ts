@@ -222,13 +222,15 @@ describe('server', () => {
   describe('startToolshedServer', () => {
     it('starts the server and registers handlers', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       expect(mockSetRequestHandler).toHaveBeenCalledTimes(2);
     });
 
     it('invokes the ListTools handler and no longer exposes resolve_approval (C1 regression)', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const listToolsHandler = mockSetRequestHandler.mock.calls[0][1] as (req: unknown) => Promise<{ tools: Array<{ name: string }> }>;
       const response = await listToolsHandler?.({});
       expect(response.tools).toHaveLength(1);
@@ -238,7 +240,8 @@ describe('server', () => {
 
     it('invokes the CallTool handler with a valid minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, SECRET);
       const response = await callToolHandler?.({
@@ -262,7 +265,8 @@ describe('server', () => {
 
     it('invokes the CallTool handler without a minion token and rejects the call', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({
         params: {
@@ -278,7 +282,8 @@ describe('server', () => {
 
     it('invokes the CallTool handler without arguments', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({ params: {} });
       expect(response.content[0].text).toContain('invalid minion token');
@@ -286,7 +291,8 @@ describe('server', () => {
 
     it('rejects a forged/tampered minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, 'wrong-secret');
       const response = await callToolHandler?.({
@@ -308,7 +314,8 @@ describe('server', () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
       process.env.TOOLSHED_ALLOW_UNSIGNED = '1';
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       warnSpy.mockRestore();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({

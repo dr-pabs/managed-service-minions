@@ -58,6 +58,21 @@ export function createMemoryStore(now: () => number = Date.now): SessionStore {
     getApproval(id: string): PendingApproval | undefined {
       return approvals.get(id);
     },
+    getApprovalByRequestHash(requestHash: string): PendingApproval | undefined {
+      // Most-recently-requested match: a prior approval for the same hash
+      // may already be consumed/denied/expired, in which case the gate
+      // creates a fresh one — but that fresh one becomes the new "most
+      // recent" match for any further resubmission, so ties must resolve to
+      // the newest `requestedAt`.
+      let best: PendingApproval | undefined;
+      for (const approval of approvals.values()) {
+        if (approval.requestHash !== requestHash) continue;
+        if (!best || approval.requestedAt > best.requestedAt) {
+          best = approval;
+        }
+      }
+      return best;
+    },
     resolveApproval(
       id: string,
       decision: 'approved' | 'denied',
@@ -71,6 +86,12 @@ export function createMemoryStore(now: () => number = Date.now): SessionStore {
           approval.approverKind = approver.kind;
           approval.approverId = approver.id;
         }
+      }
+    },
+    markApprovalConsumed(id: string, consumedAt: number): void {
+      const approval = approvals.get(id);
+      if (approval) {
+        approval.consumedAt = consumedAt;
       }
     },
     listPendingApprovals(): PendingApproval[] {
@@ -204,6 +225,29 @@ function migrateApprovalApproverColumns(db: BetterSqlite3Database): void {
   }
 }
 
+/**
+ * Additive, guarded migration: adds `request_hash`/`consumed_at` to
+ * `pending_approvals` if missing (Milestone 4 — H3/F1's resume-by-resubmit
+ * contract needs to look an approval up by request hash and mark it
+ * consumed exactly once). Same PRAGMA-guarded pattern as the other
+ * migrations in this file. `request_hash` cannot be `NOT NULL` without a
+ * backfill for pre-existing rows, so it defaults to `''`; no production
+ * deployment has real approval rows predating this milestone, and an empty
+ * hash never matches a real `computeRequestHash` output (always 64 hex
+ * chars), so old rows are simply never resumed by hash — the only
+ * observable effect of leaving them un-backfilled.
+ */
+function migrateApprovalRequestHashColumns(db: BetterSqlite3Database): void {
+  const columns = db.prepare('PRAGMA table_info(pending_approvals)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'request_hash')) {
+    db.exec("ALTER TABLE pending_approvals ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.some((column) => column.name === 'consumed_at')) {
+    db.exec('ALTER TABLE pending_approvals ADD COLUMN consumed_at INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pending_approvals_request_hash ON pending_approvals (request_hash)');
+}
+
 function initializeSchema(db: BetterSqlite3Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -241,7 +285,9 @@ function initializeSchema(db: BetterSqlite3Database): void {
       requested_at INTEGER NOT NULL,
       timeout_at INTEGER NOT NULL,
       decision TEXT,
-      decided_at INTEGER
+      decided_at INTEGER,
+      request_hash TEXT NOT NULL DEFAULT '',
+      consumed_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS idx_pending_approvals_decision ON pending_approvals (decision);
@@ -274,6 +320,7 @@ function initializeSchema(db: BetterSqlite3Database): void {
   migrateCacheExpiresAtColumn(db);
   migrateCacheInsertedAtColumn(db);
   migrateApprovalApproverColumns(db);
+  migrateApprovalRequestHashColumns(db);
 }
 
 function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number): SessionStore {
@@ -292,14 +339,18 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
   const selectRunsByCorrelation = db.prepare('SELECT * FROM minion_runs WHERE correlation_id = ?');
   const updateRun = db.prepare('UPDATE minion_runs SET status = ?, result_json = ?, tokens_used = ?, completed_at = ? WHERE id = ?');
   const insertApproval = db.prepare(
-    `INSERT INTO pending_approvals (id, session_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at, approver_kind, approver_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO pending_approvals (id, session_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at, approver_kind, approver_id, request_hash, consumed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const selectApproval = db.prepare('SELECT * FROM pending_approvals WHERE id = ?');
+  const selectApprovalsByRequestHash = db.prepare(
+    'SELECT * FROM pending_approvals WHERE request_hash = ? ORDER BY requested_at DESC LIMIT 1'
+  );
   const selectPendingApprovals = db.prepare('SELECT * FROM pending_approvals WHERE decision IS NULL');
   const resolveApprovalStmt = db.prepare(
     'UPDATE pending_approvals SET decision = ?, decided_at = ?, approver_kind = ?, approver_id = ? WHERE id = ?'
   );
+  const markApprovalConsumedStmt = db.prepare('UPDATE pending_approvals SET consumed_at = ? WHERE id = ?');
   const insertAuditEntry = db.prepare(
     `INSERT INTO audit_log (id, timestamp, correlation_id, minion_type, team_id, server_alias, tool_name, params, status, latency_ms, error, retry_after_seconds, approval_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -381,11 +432,17 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
         approval.decision ?? null,
         approval.decidedAt ?? null,
         approval.approverKind ?? null,
-        approval.approverId ?? null
+        approval.approverId ?? null,
+        approval.requestHash,
+        approval.consumedAt ?? null
       );
     },
     getApproval(id: string): PendingApproval | undefined {
       const row = selectApproval.get(id) as Record<string, unknown> | undefined;
+      return row ? rowToApproval(row) : undefined;
+    },
+    getApprovalByRequestHash(requestHash: string): PendingApproval | undefined {
+      const row = selectApprovalsByRequestHash.get(requestHash) as Record<string, unknown> | undefined;
       return row ? rowToApproval(row) : undefined;
     },
     resolveApproval(
@@ -396,6 +453,9 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
       const approval = selectApproval.get(id) as Record<string, unknown> | undefined;
       if (!approval) return;
       resolveApprovalStmt.run(decision, now(), approver?.kind ?? null, approver?.id ?? null, id);
+    },
+    markApprovalConsumed(id: string, consumedAt: number): void {
+      markApprovalConsumedStmt.run(consumedAt, id);
     },
     listPendingApprovals(): PendingApproval[] {
       const rows = selectPendingApprovals.all() as Record<string, unknown>[];
@@ -496,6 +556,8 @@ function rowToApproval(row: Record<string, unknown>): PendingApproval {
     decidedAt: row.decided_at == null ? undefined : Number(row.decided_at),
     approverKind: row.approver_kind == null ? undefined : (String(row.approver_kind) as 'slack' | 'teams' | 'dashboard'),
     approverId: row.approver_id == null ? undefined : String(row.approver_id),
+    requestHash: String(row.request_hash ?? ''),
+    consumedAt: row.consumed_at == null ? undefined : Number(row.consumed_at),
   };
 }
 

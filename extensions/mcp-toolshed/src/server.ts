@@ -14,6 +14,7 @@ import { createSqliteStore } from './store.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { createMcpAdapter, type McpServerAdapter, type McpAdapterConfig } from './adapter.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+import { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
 
 // This file lives at extensions/mcp-toolshed/src/server.ts (or, once built,
 // extensions/mcp-toolshed/dist/server.js) — three directories below the
@@ -152,9 +153,35 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
   });
 }
 
-export async function startToolshedServer(_port: number): Promise<void> {
+/**
+ * Starts BOTH toolshed transports in the same process:
+ *  - the minion-facing MCP server over stdio (unchanged) — this is what
+ *    minions actually call `execute_tool` through, and it never gained an
+ *    approve/resolve surface (C1's fix stands).
+ *  - the operator-facing HTTP server on `port` (Milestone 4, H3/F1) — bare
+ *    `node:http`, bearer-token authenticated, serving
+ *    `POST /approvals/:id/resolve` and `GET /approvals/pending` for the
+ *    Slack/Teams action handlers and the dashboard.
+ *
+ * The two transports don't compete for anything: stdio is the process's
+ * own stdin/stdout, HTTP is a TCP listener on `port` — there is no shared
+ * resource to arbitrate, so running both concurrently in one process is
+ * simply two independent event-loop listeners (see the ExecPlan Decision
+ * Log for this coexistence choice). This is also the first real use of the
+ * `port` argument — previously named `_port` and never used, a Low finding
+ * this milestone resolves.
+ */
+export async function startToolshedServer(port: number): Promise<{ operatorHttp: OperatorHttpServer }> {
   const state = await buildToolshedState();
   initializeToolshed(state);
+
+  const operatorToken = process.env.TOOLSHED_OPERATOR_TOKEN ?? '';
+  if (!operatorToken) {
+    console.warn(
+      '[toolshed] TOOLSHED_OPERATOR_TOKEN is not set — the operator HTTP endpoints will reject every request with 401. Set it to allow Slack/Teams/dashboard approval resolution.'
+    );
+  }
+  const operatorHttp = await startOperatorHttpServer(state.store, port, operatorToken);
 
   const server = new Server(
     { name: 'mcp-toolshed', version: '0.1.0' },
@@ -188,4 +215,6 @@ export async function startToolshedServer(_port: number): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  return { operatorHttp };
 }

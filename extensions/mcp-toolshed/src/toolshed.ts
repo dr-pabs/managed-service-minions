@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type { SessionStore, PendingApproval, AuditEntry } from 'framework-core';
-import { verifyMinionToken } from 'framework-core';
+import { verifyMinionToken, canonicalJson } from 'framework-core';
 import {
   type AllowlistConfig,
   type GovernanceConfig,
@@ -27,7 +27,15 @@ export interface ToolContext {
 }
 
 export interface ToolResult {
-  status: 'success' | 'error' | 'blocked_by_allowlist' | 'throttled' | 'approval_required' | 'approval_denied' | 'approval_timeout';
+  status:
+    | 'success'
+    | 'error'
+    | 'blocked_by_allowlist'
+    | 'throttled'
+    | 'approval_required'
+    | 'approval_pending'
+    | 'approval_denied'
+    | 'approval_timeout';
   data?: unknown;
   error?: string;
   retryAfterSeconds?: number;
@@ -56,6 +64,23 @@ export interface ToolshedState {
    * loudly by the caller (`server.ts`) at startup.
    */
   allowUnsignedTokens: boolean;
+  /**
+   * Invoked once when a NEW pending approval is created for a destructive
+   * call (Milestone 4, H3/F1). Typically posts a Slack/Teams Approve/Deny
+   * message. Failure here must never lose the approval record — the record
+   * is already persisted via `store.createApproval` before this is called,
+   * and a rejected/thrown notifier is caught and logged, not surfaced as a
+   * tool failure (the approval still exists and can be resolved through the
+   * dashboard or a retried notification even if the first chat post failed).
+   */
+  approvalNotifier?: (approval: PendingApproval, ctx: ToolContext) => Promise<void>;
+  /**
+   * Injectable clock, matching the pattern already used by the SQLite/memory
+   * stores (Milestone 2 Decision Log): read-time approval-timeout evaluation
+   * (`timeoutAt` comparison) must never depend on a real timer, so tests can
+   * advance a fake clock deterministically instead of sleeping.
+   */
+  now: () => number;
 }
 
 let globalState: ToolshedState | undefined;
@@ -72,27 +97,26 @@ export function getToolshedState(): ToolshedState | undefined {
   return globalState;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export async function waitForApproval(
-  store: SessionStore,
-  approvalId: string,
-  timeoutMs: number,
-  pollIntervalMs = 500
-): Promise<'approved' | 'denied' | 'timeout'> {
-  let remaining = timeoutMs;
-  while (remaining > 0) {
-    const approval = store.getApproval(approvalId);
-    if (approval?.decision) {
-      return approval.decision;
-    }
-    const sleepMs = Math.min(pollIntervalMs, remaining);
-    await sleep(sleepMs);
-    remaining -= sleepMs;
-  }
-  return 'timeout';
+/**
+ * `requestHash = sha256(serverAlias + toolName + canonicalJSON(params) +
+ * correlationId)` (Milestone 4, H3/F1; ExecPlan Artifacts and Notes pins
+ * this contract). Identical resubmission of the same destructive call
+ * (same server/tool/params/correlation) hashes identically regardless of
+ * incidental key ordering in `params` — see `canonicalJson` in
+ * `framework-core` for why plain `JSON.stringify` is not good enough.
+ */
+export function computeRequestHash(
+  serverAlias: string,
+  toolName: string,
+  params: unknown,
+  correlationId: string
+): string {
+  return createHash('sha256')
+    .update(serverAlias)
+    .update(toolName)
+    .update(canonicalJson(params))
+    .update(correlationId)
+    .digest('hex');
 }
 
 function getBreaker(
@@ -355,40 +379,102 @@ export async function executeTool(
   }
 
   if (isDestructive(toolshedState.governance, serverAlias, toolName, paramsRecord)) {
-    const approvalId = `appr_${ctx.correlationId}_${serverAlias}_${toolName}_${Date.now()}`;
-    const approval: PendingApproval = {
-      id: approvalId,
-      sessionId: ctx.teamId,
-      correlationId: ctx.correlationId,
-      serverAlias,
-      toolName,
-      paramsJson: JSON.stringify(params),
-      requestedAt: Date.now(),
-      timeoutAt: Date.now() + toolshedState.governance.approvalTimeoutMinutes * 60_000,
-    };
-    toolshedState.store.createApproval(approval);
-
-    const timeoutMs = Math.max(0, approval.timeoutAt - approval.requestedAt);
-    const decision = await waitForApproval(toolshedState.store, approvalId, timeoutMs);
-
-    if (decision === 'denied') {
-      return emit({
-        status: 'approval_denied',
-        approvalId,
-        error: 'Destructive action was denied by the operator',
-      });
-    }
-
-    if (decision === 'timeout') {
-      return emit({
-        status: 'approval_timeout',
-        approvalId,
-        error: 'Approval request timed out',
-      });
-    }
+    return emit(await gateDestructiveCall(toolshedState, ctx, serverAlias, toolName, params, breaker));
   }
 
   return emit(await doExecuteTool(ctx, serverAlias, toolName, params, breaker));
+}
+
+/**
+ * Asynchronous, chat-visible approval gate (Milestone 4, H3/F1 — replaces
+ * the old in-call `waitForApproval` poll, which could block for up to the
+ * governed timeout with no way to succeed through a real HTTP transport).
+ * Returns immediately in every branch; a human decision is applied the next
+ * time an IDENTICAL call (same serverAlias/toolName/canonicalJSON(params)/
+ * correlationId) is submitted — see `computeRequestHash` and the ExecPlan's
+ * Artifacts and Notes for the pinned resume contract.
+ */
+async function gateDestructiveCall(
+  state: ToolshedState,
+  ctx: ToolContext,
+  serverAlias: string,
+  toolName: string,
+  params: unknown,
+  breaker: CircuitBreaker
+): Promise<Pick<ToolResult, 'status' | 'data' | 'error' | 'approvalId'>> {
+  const requestHash = computeRequestHash(serverAlias, toolName, params, ctx.correlationId);
+  const existing = state.store.getApprovalByRequestHash(requestHash);
+
+  if (existing && existing.decision === 'approved' && existing.consumedAt === undefined) {
+    // Read-time timeout: a decision made after timeoutAt still counts as
+    // approved-in-the-store, but the governance timeout window has since
+    // elapsed — treat it the same as an unresolved-and-expired approval
+    // rather than silently honoring a stale approval.
+    if (existing.timeoutAt < state.now()) {
+      return { status: 'approval_timeout', approvalId: existing.id, error: 'Approval request timed out' };
+    }
+    state.store.markApprovalConsumed(existing.id, state.now());
+    return { approvalId: existing.id, ...(await doExecuteTool(ctx, serverAlias, toolName, params, breaker)) };
+  }
+
+  if (existing && existing.decision === 'denied') {
+    return {
+      status: 'approval_denied',
+      approvalId: existing.id,
+      error: 'Destructive action was denied by the operator',
+    };
+  }
+
+  if (existing && existing.decision === undefined) {
+    // Still awaiting a human decision. Read-time timeout applies here too:
+    // no timers ever fire this — the NEXT identical resubmission is what
+    // discovers that timeoutAt has passed.
+    if (existing.timeoutAt < state.now()) {
+      return { status: 'approval_timeout', approvalId: existing.id, error: 'Approval request timed out' };
+    }
+    return { status: 'approval_pending', approvalId: existing.id };
+  }
+
+  // No live match (none exists, or the only match was already consumed, or
+  // timed out and thus no longer eligible to be resumed) — a consumed or
+  // timed-out approval never executes twice, so a further identical
+  // resubmission always creates a fresh approval rather than reusing an old
+  // record's decision.
+  const requestedAt = state.now();
+  // A random suffix (not just requestedAt) guarantees a fresh id even when
+  // two approvals for the same call are created within the same
+  // millisecond of an injected/fake clock — e.g. a consumed-then-resubmitted
+  // approval created back-to-back in a test with no real time elapsed.
+  const approvalId = `appr_${ctx.correlationId}_${serverAlias}_${toolName}_${requestedAt}_${randomUUID()}`;
+  const approval: PendingApproval = {
+    id: approvalId,
+    sessionId: ctx.teamId,
+    correlationId: ctx.correlationId,
+    serverAlias,
+    toolName,
+    paramsJson: JSON.stringify(params),
+    requestedAt,
+    timeoutAt: requestedAt + state.governance.approvalTimeoutMinutes * 60_000,
+    requestHash,
+  };
+  state.store.createApproval(approval);
+
+  if (state.approvalNotifier) {
+    try {
+      await state.approvalNotifier(approval, ctx);
+    } catch (err) {
+      // Notifier failure (e.g. Slack API down) must never lose the approval
+      // record — it is already persisted above. An operator can still
+      // resolve it via the dashboard, or a future milestone can retry the
+      // notification; the tool call itself just reports approval_pending
+      // either way.
+      console.error(
+        `[toolshed] approvalNotifier failed for ${approvalId}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  return { status: 'approval_pending', approvalId };
 }
 
 async function doExecuteTool(
@@ -460,6 +546,7 @@ export function createDefaultToolshedState(
       halfOpenMaxRequests: 1,
     },
     allowUnsignedTokens: false,
+    now: Date.now,
     ...overrides,
   };
 }

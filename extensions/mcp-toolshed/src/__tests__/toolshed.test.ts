@@ -7,7 +7,6 @@ import {
   resetToolshed,
   createDefaultToolshedState,
   getToolshedState,
-  waitForApproval,
   resolveApprovalRecord,
 } from '../toolshed.js';
 import { createMemoryStore } from '../store.js';
@@ -133,16 +132,13 @@ describe('executeTool', () => {
     expect(result.error).toBe('Circuit breaker is open');
   });
 
-  it('requires approval and executes destructive actions when approved', async () => {
-    jest.useFakeTimers({ legacyFakeTimers: true });
-    const adapter = createMockAdapter('github', {
-      callTool: async () => ({ merged: true }),
-    });
-    const store = createMemoryStore();
-    initializeToolshed(
-      createDefaultToolshedState({
+  describe('asynchronous approval gate (Milestone 4, H3/F1: no in-call waiting)', () => {
+    function destructiveState(overrides: Partial<Parameters<typeof createDefaultToolshedState>[0]> = {}) {
+      const store = overrides.store ?? createMemoryStore();
+      const adapters = overrides.adapters ?? new Map();
+      return createDefaultToolshedState({
         store,
-        adapters: new Map([['github', adapter]]),
+        adapters,
         allowlists: {
           allowlists: { code_explorer: { github: ['merge_pull_request'] } },
           pathScopes: {},
@@ -154,90 +150,227 @@ describe('executeTool', () => {
           workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
           cachePolicy: { default: { cacheable: false } },
         },
-      })
-    );
+        ...overrides,
+      });
+    }
 
-    let approvalId = '';
-    const originalCreateApproval = store.createApproval.bind(store);
-    store.createApproval = jest.fn((approval) => {
-      approvalId = approval.id;
-      originalCreateApproval(approval);
+    it('returns approval_pending in well under a second — no in-call polling (H3 regression)', async () => {
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store }));
+
+      const start = Date.now();
+      const result = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const elapsedMs = Date.now() - start;
+
+      expect(result.status).toBe('approval_pending');
+      expect(result.approvalId).toBeDefined();
+      // The old code polled for up to approvalTimeoutMinutes (here 15 min);
+      // the new code must never block at all. A generous 500ms upper bound
+      // proves this without a flaky tight bound.
+      expect(elapsedMs).toBeLessThan(500);
     });
 
-    const promise = executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
-    jest.advanceTimersByTime(1000);
-    store.resolveApproval(approvalId, 'approved');
+    it('creates a pending approval record with a requestHash and calls the approvalNotifier exactly once', async () => {
+      const store = createMemoryStore();
+      const notified: unknown[] = [];
+      initializeToolshed(
+        destructiveState({
+          store,
+          approvalNotifier: async (approval) => {
+            notified.push(approval);
+          },
+        })
+      );
 
-    const result = await promise;
-    expect(result.status).toBe('success');
-    expect(result.data).toEqual({ merged: true });
-    jest.useRealTimers();
-  });
-
-  it('requires approval and denies destructive actions when denied', async () => {
-    jest.useFakeTimers({ legacyFakeTimers: true });
-    const store = createMemoryStore();
-    initializeToolshed(
-      createDefaultToolshedState({
-        store,
-        adapters: new Map(),
-        allowlists: {
-          allowlists: { code_explorer: { github: ['merge_pull_request'] } },
-          pathScopes: {},
-        },
-        governance: {
-          destructiveActions: [{ serverAlias: 'github', toolName: 'merge_pull_request' }],
-          approvalTimeoutMinutes: 15,
-          rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
-          workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
-          cachePolicy: { default: { cacheable: false } },
-        },
-      })
-    );
-
-    let approvalId = '';
-    const originalCreateApproval = store.createApproval.bind(store);
-    store.createApproval = jest.fn((approval) => {
-      approvalId = approval.id;
-      originalCreateApproval(approval);
+      const result = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const approval = store.getApproval(result.approvalId!);
+      expect(approval).toBeDefined();
+      expect(approval!.requestHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(approval!.decision).toBeUndefined();
+      expect(notified).toHaveLength(1);
     });
 
-    const promise = executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
-    jest.advanceTimersByTime(1000);
-    store.resolveApproval(approvalId, 'denied');
+    it('resubmit-after-approve executes exactly once and marks the record consumed', async () => {
+      const adapter = createMockAdapter('github', {
+        callTool: jest.fn(async () => ({ merged: true })) as never,
+      });
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store, adapters: new Map([['github', adapter]]) }));
 
-    const result = await promise;
-    expect(result.status).toBe('approval_denied');
-    jest.useRealTimers();
-  });
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(first.status).toBe('approval_pending');
 
-  it('times out when approval is not resolved', async () => {
-    jest.useFakeTimers({ legacyFakeTimers: true });
-    const store = createMemoryStore();
-    initializeToolshed(
-      createDefaultToolshedState({
-        store,
-        adapters: new Map(),
-        allowlists: {
-          allowlists: { code_explorer: { github: ['merge_pull_request'] } },
-          pathScopes: {},
-        },
-        governance: {
-          destructiveActions: [{ serverAlias: 'github', toolName: 'merge_pull_request' }],
-          approvalTimeoutMinutes: 0.001,
-          rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
-          workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
-          cachePolicy: { default: { cacheable: false } },
-        },
-      })
-    );
+      store.resolveApproval(first.approvalId!, 'approved');
 
-    const promise = executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
-    jest.advanceTimersByTime(200);
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(second.status).toBe('success');
+      expect(second.data).toEqual({ merged: true });
+      expect(store.getApproval(first.approvalId!)?.consumedAt).toBeDefined();
+      expect((adapter.callTool as jest.Mock)).toHaveBeenCalledTimes(1);
 
-    const result = await promise;
-    expect(result.status).toBe('approval_timeout');
-    jest.useRealTimers();
+      // A THIRD identical resubmission must not execute again: the approval
+      // is already consumed, so it creates a FRESH approval (pending) rather
+      // than re-running the same decision.
+      const third = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(third.status).toBe('approval_pending');
+      expect(third.approvalId).not.toBe(first.approvalId);
+      expect((adapter.callTool as jest.Mock)).toHaveBeenCalledTimes(1);
+    });
+
+    it('deny path: resubmit-after-deny returns approval_denied without calling the adapter', async () => {
+      const adapter = createMockAdapter('github', {
+        callTool: jest.fn(async () => ({ merged: true })) as never,
+      });
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store, adapters: new Map([['github', adapter]]) }));
+
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      store.resolveApproval(first.approvalId!, 'denied');
+
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(second.status).toBe('approval_denied');
+      expect(second.approvalId).toBe(first.approvalId);
+      expect(adapter.callTool).not.toHaveBeenCalled();
+    });
+
+    it('read-time timeout: a resubmission past timeoutAt returns approval_timeout instead of executing', async () => {
+      let clock = 1_000_000;
+      const store = createMemoryStore(() => clock);
+      const adapter = createMockAdapter('github', {
+        callTool: jest.fn(async () => ({ merged: true })) as never,
+      });
+      initializeToolshed(
+        destructiveState({
+          store,
+          adapters: new Map([['github', adapter]]),
+          governance: {
+            destructiveActions: [{ serverAlias: 'github', toolName: 'merge_pull_request' }],
+            approvalTimeoutMinutes: 1,
+            rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
+            workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+            cachePolicy: { default: { cacheable: false } },
+          },
+          now: () => clock,
+        })
+      );
+
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(first.status).toBe('approval_pending');
+
+      // Advance the injected clock (no real timers, no sleeps) past the
+      // 1-minute approvalTimeoutMinutes window, then resubmit while still
+      // undecided — read-time timeout evaluation, not a background timer.
+      clock += 2 * 60_000;
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(second.status).toBe('approval_timeout');
+      expect(adapter.callTool).not.toHaveBeenCalled();
+    });
+
+    it('read-time timeout also applies to an approved-but-expired record (approved after the window closed)', async () => {
+      let clock = 1_000_000;
+      const store = createMemoryStore(() => clock);
+      const adapter = createMockAdapter('github', {
+        callTool: jest.fn(async () => ({ merged: true })) as never,
+      });
+      initializeToolshed(
+        destructiveState({
+          store,
+          adapters: new Map([['github', adapter]]),
+          governance: {
+            destructiveActions: [{ serverAlias: 'github', toolName: 'merge_pull_request' }],
+            approvalTimeoutMinutes: 1,
+            rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
+            workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+            cachePolicy: { default: { cacheable: false } },
+          },
+          now: () => clock,
+        })
+      );
+
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      clock += 2 * 60_000;
+      store.resolveApproval(first.approvalId!, 'approved');
+
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(second.status).toBe('approval_timeout');
+      expect(adapter.callTool).not.toHaveBeenCalled();
+    });
+
+    it('notifier failure does not lose the approval record — it is still readable and resolvable', async () => {
+      const store = createMemoryStore();
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      initializeToolshed(
+        destructiveState({
+          store,
+          approvalNotifier: async () => {
+            throw new Error('slack API is down');
+          },
+        })
+      );
+
+      const result = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(result.status).toBe('approval_pending');
+      const approval = store.getApproval(result.approvalId!);
+      expect(approval).toBeDefined();
+      expect(approval!.decision).toBeUndefined();
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('slack API is down'));
+
+      // The record is still fully usable despite the notifier failing:
+      store.resolveApproval(result.approvalId!, 'approved');
+      consoleSpy.mockRestore();
+    });
+
+    it('notifier failure with a non-Error throw is still logged and does not lose the record', async () => {
+      const store = createMemoryStore();
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      initializeToolshed(
+        destructiveState({
+          store,
+          approvalNotifier: async () => {
+            throw 'not an Error instance';
+          },
+        })
+      );
+
+      const result = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      expect(result.status).toBe('approval_pending');
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('not an Error instance'));
+      consoleSpy.mockRestore();
+    });
+
+    it('every new exit path emits an audit entry, including approval_pending (invariant 2)', async () => {
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store }));
+      await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const entries = store.listAuditEntries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0].status).toBe('approval_pending');
+      expect(entries[0].approvalId).toBeDefined();
+    });
+
+    it('a different requestHash (different params) never matches a pending approval for another call', async () => {
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store }));
+
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 2 });
+
+      expect(first.approvalId).not.toBe(second.approvalId);
+      expect(second.status).toBe('approval_pending');
+    });
+
+    it('an identical resubmission while still undecided returns approval_pending again for the SAME record', async () => {
+      const store = createMemoryStore();
+      initializeToolshed(destructiveState({ store }));
+
+      const first = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+      const second = await executeTool(baseCtx, 'github', 'merge_pull_request', { pr: 1 });
+
+      expect(first.status).toBe('approval_pending');
+      expect(second.status).toBe('approval_pending');
+      expect(second.approvalId).toBe(first.approvalId);
+      expect(store.listPendingApprovals()).toHaveLength(1);
+    });
   });
 
   it('survives an async audit logger failure', async () => {
@@ -522,6 +655,7 @@ describe('resolveApprovalRecord (internal — not exposed as an MCP tool, C1 fix
       paramsJson: '{}',
       requestedAt: 1,
       timeoutAt: 2,
+      requestHash: 'hash_1',
     });
     initializeToolshed(
       createDefaultToolshedState({
@@ -888,85 +1022,5 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
       {}
     );
     expect(result.status).toBe('blocked_by_allowlist');
-  });
-});
-
-describe('waitForApproval', () => {
-  it('returns approved when the store already has a decision', async () => {
-    const store = createMemoryStore();
-    store.createApproval({
-      id: 'a1',
-      sessionId: 's1',
-      correlationId: 'corr_1',
-      serverAlias: 'github',
-      toolName: 'merge_pull_request',
-      paramsJson: '{}',
-      requestedAt: 1,
-      timeoutAt: 2,
-      decision: 'approved',
-      decidedAt: 3,
-    });
-
-    const result = await waitForApproval(store, 'a1', 1000, 50);
-    expect(result).toBe('approved');
-  });
-
-  it('returns denied when the store already has a decision', async () => {
-    const store = createMemoryStore();
-    store.createApproval({
-      id: 'a1',
-      sessionId: 's1',
-      correlationId: 'corr_1',
-      serverAlias: 'github',
-      toolName: 'merge_pull_request',
-      paramsJson: '{}',
-      requestedAt: 1,
-      timeoutAt: 2,
-      decision: 'denied',
-      decidedAt: 3,
-    });
-
-    const result = await waitForApproval(store, 'a1', 1000, 50);
-    expect(result).toBe('denied');
-  });
-
-  it('polls until a decision is made', async () => {
-    jest.useFakeTimers({ legacyFakeTimers: true });
-    const store = createMemoryStore();
-    store.createApproval({
-      id: 'a1',
-      sessionId: 's1',
-      correlationId: 'corr_1',
-      serverAlias: 'github',
-      toolName: 'merge_pull_request',
-      paramsJson: '{}',
-      requestedAt: 1,
-      timeoutAt: 1000,
-    });
-
-    const promise = waitForApproval(store, 'a1', 1000, 100);
-    jest.advanceTimersByTime(250);
-    store.resolveApproval('a1', 'approved');
-
-    const result = await promise;
-    expect(result).toBe('approved');
-    jest.useRealTimers();
-  });
-
-  it('returns timeout when no decision is made', async () => {
-    const store = createMemoryStore();
-    store.createApproval({
-      id: 'a1',
-      sessionId: 's1',
-      correlationId: 'corr_1',
-      serverAlias: 'github',
-      toolName: 'merge_pull_request',
-      paramsJson: '{}',
-      requestedAt: 1,
-      timeoutAt: 1000,
-    });
-
-    const result = await waitForApproval(store, 'a1', 50, 25);
-    expect(result).toBe('timeout');
   });
 });

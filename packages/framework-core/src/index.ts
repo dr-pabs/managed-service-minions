@@ -6,3 +6,4 @@ export * from './correlation.js';
 export * from './ingress.js';
 export * from './goose-runner.js';
 export * from './minion-token.js';
+export * from './canonical-json.js';

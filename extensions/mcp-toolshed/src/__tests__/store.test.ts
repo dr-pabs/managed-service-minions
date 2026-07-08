@@ -72,6 +72,7 @@ describe('store', () => {
         paramsJson: '{}',
         requestedAt: 1,
         timeoutAt: 2,
+        requestHash: 'hash_1',
       };
       store.createApproval(approval);
       expect(store.getApproval('a1')).toBe(approval);
@@ -93,11 +94,59 @@ describe('store', () => {
         paramsJson: '{}',
         requestedAt: 1,
         timeoutAt: 2,
+        requestHash: 'hash_1',
       };
       store.createApproval(approval);
       store.resolveApproval('a2', 'approved', { kind: 'slack', id: 'U123' });
       expect(approval.approverKind).toBe('slack');
       expect(approval.approverId).toBe('U123');
+    });
+
+    it('getApprovalByRequestHash returns the most-recently-requested match (Milestone 4 resume contract)', () => {
+      const store = createMemoryStore();
+      store.createApproval({
+        id: 'older',
+        sessionId: 's1',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 100,
+        timeoutAt: 200,
+        requestHash: 'shared_hash',
+      });
+      store.createApproval({
+        id: 'newer',
+        sessionId: 's1',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 200,
+        timeoutAt: 300,
+        requestHash: 'shared_hash',
+      });
+      expect(store.getApprovalByRequestHash('shared_hash')?.id).toBe('newer');
+      expect(store.getApprovalByRequestHash('no_such_hash')).toBeUndefined();
+    });
+
+    it('markApprovalConsumed sets consumedAt and is a no-op for a missing approval', () => {
+      const store = createMemoryStore();
+      const approval: PendingApproval = {
+        id: 'a3',
+        sessionId: 's1',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 1,
+        timeoutAt: 2,
+        requestHash: 'hash_3',
+      };
+      store.createApproval(approval);
+      store.markApprovalConsumed('a3', 999);
+      expect(approval.consumedAt).toBe(999);
+      store.markApprovalConsumed('missing', 999);
     });
 
     it('caches tool calls', () => {
@@ -277,6 +326,7 @@ describe('store', () => {
         paramsJson: '{}',
         requestedAt: 1,
         timeoutAt: 2,
+        requestHash: 'hash_1',
       });
       store.resolveApproval('a1', 'approved', { kind: 'dashboard', id: 'operator_1' });
       store.setCachedToolCall('key', { value: 42 }, 60_000);
@@ -390,6 +440,85 @@ describe('store', () => {
 
       const store = createSqliteStore(':memory:', DatabaseCtor);
       expect(store.getApproval('missing')).toBeUndefined();
+    });
+
+    it('retrieves an approval by requestHash from sqlite (Milestone 4 resume contract)', () => {
+      const prepared = createStatement({
+        get: jest.fn().mockReturnValue({
+          id: 'a1',
+          session_id: 's1',
+          correlation_id: 'corr_1',
+          server_alias: 'github',
+          tool_name: 'merge_pull_request',
+          params_json: '{}',
+          requested_at: 1,
+          timeout_at: 2,
+          request_hash: 'hash_1',
+        }) as unknown as Statement['get'],
+      });
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      const approval = store.getApprovalByRequestHash('hash_1');
+      expect(approval).toMatchObject({ id: 'a1', requestHash: 'hash_1' });
+    });
+
+    it('maps a populated consumed_at column to consumedAt', () => {
+      const prepared = createStatement({
+        get: jest.fn().mockReturnValue({
+          id: 'a1',
+          session_id: 's1',
+          correlation_id: 'corr_1',
+          server_alias: 'github',
+          tool_name: 'merge_pull_request',
+          params_json: '{}',
+          requested_at: 1,
+          timeout_at: 2,
+          request_hash: 'hash_1',
+          consumed_at: 555,
+        }) as unknown as Statement['get'],
+      });
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      expect(store.getApproval('a1')?.consumedAt).toBe(555);
+    });
+
+    it('returns undefined when no sqlite approval matches the requestHash', () => {
+      const prepared = createStatement();
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      expect(store.getApprovalByRequestHash('missing_hash')).toBeUndefined();
+    });
+
+    it('marks an approval consumed in sqlite', () => {
+      const prepared = createStatement();
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      store.markApprovalConsumed('a1', 12345);
+      expect(prepared.run).toHaveBeenCalledWith(12345, 'a1');
     });
 
     it('maps null sqlite approval decision fields to undefined', () => {
@@ -977,6 +1106,7 @@ describe('store', () => {
         paramsJson: '{}',
         requestedAt: 1,
         timeoutAt: 2,
+        requestHash: 'hash_1',
       });
       store.resolveApproval('a1', 'approved');
       expect(store.listPendingApprovals()).toHaveLength(0);

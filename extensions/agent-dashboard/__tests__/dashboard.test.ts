@@ -147,6 +147,7 @@ describe('startDashboardServer', () => {
       paramsJson: '{}',
       requestedAt: 1,
       timeoutAt: 2,
+      requestHash: 'hash_1',
     });
 
     const response = await get(server.port, '/pending-approvals');

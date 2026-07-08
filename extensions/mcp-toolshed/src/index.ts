@@ -1,8 +1,10 @@
 export { startToolshedServer, type McpServerAdapter } from './server.js';
+export { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
 export {
   executeTool,
   verifyAndExecuteTool,
   resolveApprovalRecord,
+  computeRequestHash,
   initializeToolshed,
   resetToolshed,
   getToolshedState,
