@@ -14,6 +14,8 @@ on:
       - 'agents/**'
       - 'skills/**'
       - 'rules/**'
+      - 'schemas/**'
+      - 'scripts/**'
       - 'test/**'
       - 'infra/terraform/**'
       - '.github/workflows/**'
@@ -32,6 +34,8 @@ on:
       - 'agents/**'
       - 'skills/**'
       - 'rules/**'
+      - 'schemas/**'
+      - 'scripts/**'
       - 'test/**'
       - 'infra/terraform/**'
       - '.github/workflows/**'
@@ -76,6 +80,9 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Validate config (agents/rules/schemas cross-check)
+        run: pnpm tsx scripts/validate-config.ts
 
       - name: Unit tests with coverage
         run: pnpm -r --filter "!infra" test --coverage

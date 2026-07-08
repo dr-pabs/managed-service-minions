@@ -20,6 +20,6 @@
       "mcp-toolshed": ["./extensions/mcp-toolshed/src/index.ts"]
     }
   },
-  "include": ["packages/**/*.ts", "extensions/**/*.ts", "infra/**/*.ts", "test/**/*.ts"],
+  "include": ["packages/**/*.ts", "extensions/**/*.ts", "infra/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist", "coverage", "**/__tests__", "**/*.test.ts"]
 }

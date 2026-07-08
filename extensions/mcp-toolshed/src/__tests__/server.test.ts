@@ -51,6 +51,7 @@ describe('server', () => {
     delete process.env.TOOLSHED_GOVERNANCE_PATH;
     delete process.env.TOOLSHED_STORE_PATH;
     delete process.env.TOOLSHED_ADAPTERS;
+    delete process.env.TOOLSHED_REPO_ROOT;
     resetToolshed();
   });
 
@@ -135,6 +136,45 @@ describe('server', () => {
       expect(state.adapters.has('github')).toBe(false);
 
       warnSpy.mockRestore();
+    });
+
+    it('succeeds when TOOLSHED_REPO_ROOT points at a config tree with zero validator errors', async () => {
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      process.env.TOOLSHED_REPO_ROOT = path.resolve(tmpDir, '..', '..', '..', '..', '..');
+      const state = await buildToolshedState();
+      expect(state).toBeDefined();
+      delete process.env.TOOLSHED_REPO_ROOT;
+    });
+
+    it('logs every validator error and refuses to start when TOOLSHED_REPO_ROOT has config drift', async () => {
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      fs.writeFileSync(
+        path.join(tmpDir, 'placeholder.txt'),
+        'an empty repo root has no agents/, rules/, or schemas/ dirs, so nothing to cross-check but the intent enum still triggers warnings, not errors'
+      );
+      // A repo root with no agents/*.md at all has nothing to flag under
+      // check (a); use one with a real drift instead: an agents/ dir whose
+      // frontmatter minion_type has no allowlists entry.
+      fs.mkdirSync(path.join(tmpDir, 'agents'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'agents', 'ghost.md'),
+        ['---', 'name: ghost', 'minion_type: ghost_type', '---', '# Ghost'].join('\n')
+      );
+      fs.mkdirSync(path.join(tmpDir, 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'rules', 'allowlists.yaml'), 'allowlists: {}\n');
+      fs.mkdirSync(path.join(tmpDir, 'schemas'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'schemas', 'intent.json'), '{}');
+
+      process.env.TOOLSHED_REPO_ROOT = tmpDir;
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await expect(buildToolshedState()).rejects.toThrow(/config validation failed/i);
+      expect(errorSpy).toHaveBeenCalled();
+      const loggedMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages.some((m) => m.includes('ghost_type'))).toBe(true);
+
+      errorSpy.mockRestore();
+      delete process.env.TOOLSHED_REPO_ROOT;
     });
   });
 

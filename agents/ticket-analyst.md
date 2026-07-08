@@ -1,7 +1,7 @@
 ---
 name: ticket-analyst
 description: Looks up and summarizes tickets across work-tracking systems
-minion_type: ticket_lookup
+minion_type: ticket_analyst
 model_tier: fast
 token_budget: 10000
 output_schema: schemas/ticket-analyst-output.json

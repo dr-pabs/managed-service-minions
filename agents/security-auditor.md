@@ -1,7 +1,7 @@
 ---
 name: security-auditor
 description: Audits code and configuration for security issues
-minion_type: security_audit
+minion_type: security_auditor
 model_tier: security
 token_budget: 40000
 output_schema: schemas/security-auditor-output.json

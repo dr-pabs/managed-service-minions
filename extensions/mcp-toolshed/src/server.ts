@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -7,10 +9,18 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { executeTool, resolveApproval, createDefaultToolshedState, initializeToolshed, type ToolResult } from './toolshed.js';
 import { loadAllowlists, loadGovernance } from './config.js';
+import { validateConfigAtRoot } from './config-validation.js';
 import { createSqliteStore } from './store.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { createMcpAdapter, type McpServerAdapter, type McpAdapterConfig } from './adapter.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+
+// This file lives at extensions/mcp-toolshed/src/server.ts (or, once built,
+// extensions/mcp-toolshed/dist/server.js) — three directories below the
+// repo root in both cases. Used as the default value for TOOLSHED_REPO_ROOT
+// so the startup validator (see buildToolshedState below) finds agents/,
+// rules/, and schemas/ without every deployment having to set the env var.
+const DEFAULT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export interface HealthStatus {
   healthy: boolean;
@@ -74,6 +84,20 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
   const governancePath = process.env.TOOLSHED_GOVERNANCE_PATH;
   const storePath = process.env.TOOLSHED_STORE_PATH ?? ':memory:';
   const adapterJson = process.env.TOOLSHED_ADAPTERS;
+  const repoRoot = process.env.TOOLSHED_REPO_ROOT ?? DEFAULT_REPO_ROOT;
+
+  // Config errors are not downstream failures: a misconfigured toolshed
+  // (agent frontmatter drifted from rules/allowlists.yaml, a destructive
+  // tool marked cacheable, etc. — the exact class of bug that bricked two
+  // minions, C4) must never start serving tool calls. Log every error so an
+  // operator can fix all of them in one pass, then refuse to start.
+  const { errors } = validateConfigAtRoot(repoRoot);
+  if (errors.length > 0) {
+    for (const error of errors) {
+      console.error(error);
+    }
+    throw new Error(`[toolshed] config validation failed with ${errors.length} error(s); see log above`);
+  }
 
   const allowlists = loadAllowlists(allowlistsPath);
   const governance = loadGovernance(governancePath);

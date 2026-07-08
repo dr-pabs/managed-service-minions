@@ -28,6 +28,11 @@ export {
   type GovernanceConfig,
 } from './config.js';
 export {
+  validateConfigAtRoot,
+  ORCHESTRATOR_EXEMPTION,
+  type ValidationResult,
+} from './config-validation.js';
+export {
   CircuitBreaker,
   type CircuitBreakerConfig,
   type BreakerState,
