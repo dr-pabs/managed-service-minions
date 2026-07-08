@@ -154,9 +154,24 @@ export function createSqliteStore(
     initializeSchema(db);
     return createSqliteSessionStore(db, now);
   } catch (err) {
-    console.warn(
-      `[store] SQLite unavailable (${err instanceof Error ? err.message : String(err)}), falling back to memory store`
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    // H6: silently degrading to an in-memory store discards the audit trail
+    // (and every other durable record) with nothing but a console.warn — in
+    // production that is a fail-OPEN durability bug, not a graceful
+    // fallback. "Production" is defined the same way Milestone 3's
+    // signing-secret gate defines it (NODE_ENV === 'production'), so the
+    // two fail-hard checks in this codebase agree. TOOLSHED_ALLOW_MEMORY_STORE=1
+    // is an explicit, opt-in escape hatch for an operator who has genuinely
+    // decided memory-only durability is acceptable (e.g. a throwaway demo
+    // deployment) — default off, same convention as TOOLSHED_ALLOW_UNSIGNED.
+    const isProduction = process.env.NODE_ENV === 'production';
+    const allowMemoryStore = process.env.TOOLSHED_ALLOW_MEMORY_STORE === '1';
+    if (isProduction && !allowMemoryStore) {
+      throw new Error(
+        `[store] SQLite unavailable (${message}) in production (NODE_ENV=production) — refusing to silently fall back to a memory store that would discard the audit trail. Set TOOLSHED_ALLOW_MEMORY_STORE=1 to explicitly accept memory-only durability.`
+      );
+    }
+    console.warn(`[store] SQLite unavailable (${message}), falling back to memory store`);
     return createMemoryStore(now);
   }
 }

@@ -273,6 +273,76 @@ describe('store', () => {
       expect(store.getSession('s1')).toBeUndefined();
     });
 
+    describe('H6: fail-hard in production instead of silently degrading to memory', () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalAllowMemory = process.env.TOOLSHED_ALLOW_MEMORY_STORE;
+
+      afterEach(() => {
+        if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalNodeEnv;
+        if (originalAllowMemory === undefined) delete process.env.TOOLSHED_ALLOW_MEMORY_STORE;
+        else process.env.TOOLSHED_ALLOW_MEMORY_STORE = originalAllowMemory;
+      });
+
+      it('still falls back with a warning outside production (dev branch unchanged)', () => {
+        delete process.env.NODE_ENV;
+        delete process.env.TOOLSHED_ALLOW_MEMORY_STORE;
+        const DatabaseCtor = jest.fn().mockImplementation(() => {
+          throw new Error('native bindings missing');
+        }) as unknown as DatabaseCtor;
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const store = createSqliteStore(':memory:', DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        expect(store.getSession('s1')).toMatchObject({ id: 's1' });
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
+      });
+
+      it('THROWS instead of falling back in production without the escape hatch', () => {
+        process.env.NODE_ENV = 'production';
+        delete process.env.TOOLSHED_ALLOW_MEMORY_STORE;
+        const DatabaseCtor = jest.fn().mockImplementation(() => {
+          throw new Error('native bindings missing');
+        }) as unknown as DatabaseCtor;
+
+        expect(() => createSqliteStore(':memory:', DatabaseCtor)).toThrow(
+          /SQLite unavailable.*production/i
+        );
+      });
+
+      it('falls back with a warning in production when TOOLSHED_ALLOW_MEMORY_STORE=1', () => {
+        process.env.NODE_ENV = 'production';
+        process.env.TOOLSHED_ALLOW_MEMORY_STORE = '1';
+        const DatabaseCtor = jest.fn().mockImplementation(() => {
+          throw new Error('native bindings missing');
+        }) as unknown as DatabaseCtor;
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const store = createSqliteStore(':memory:', DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        expect(store.getSession('s1')).toMatchObject({ id: 's1' });
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
+      });
+    });
+
     it('uses SQLite when available', () => {
       const prepared = createStatement({
         get: jest.fn().mockImplementation(
