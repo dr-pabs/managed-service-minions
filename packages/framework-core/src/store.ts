@@ -31,6 +31,10 @@ export interface PendingApproval {
   timeoutAt: number;
   decision?: 'approved' | 'denied';
   decidedAt?: number;
+  /** Kind of operator-authenticated surface that resolved the approval (Milestone 4). */
+  approverKind?: 'slack' | 'teams' | 'dashboard';
+  /** Identity of the human approver within that surface (e.g. a Slack user ID). */
+  approverId?: string;
 }
 
 export interface AuditEntry {
@@ -59,7 +63,11 @@ export interface SessionStore {
   listMinionRunsByCorrelationRoot(root: string): MinionRun[];
   createApproval(approval: PendingApproval): void;
   getApproval(id: string): PendingApproval | undefined;
-  resolveApproval(id: string, decision: 'approved' | 'denied'): void;
+  resolveApproval(
+    id: string,
+    decision: 'approved' | 'denied',
+    approver?: { kind: 'slack' | 'teams' | 'dashboard'; id: string }
+  ): void;
   listPendingApprovals(): PendingApproval[];
   createAuditEntry(entry: AuditEntry): void;
   listAuditEntries(filters?: { correlationId?: string; limit?: number; offset?: number }): AuditEntry[];

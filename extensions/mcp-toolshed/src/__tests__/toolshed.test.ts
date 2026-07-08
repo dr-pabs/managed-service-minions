@@ -1,21 +1,26 @@
 import { jest } from '@jest/globals';
+import { mintMinionToken } from 'framework-core';
 import {
   executeTool,
+  verifyAndExecuteTool,
   initializeToolshed,
   resetToolshed,
   createDefaultToolshedState,
   getToolshedState,
   waitForApproval,
-  resolveApproval,
+  resolveApprovalRecord,
 } from '../toolshed.js';
 import { createMemoryStore } from '../store.js';
 import { createMockAdapter } from '../adapter.js';
 import { TokenBucketRateLimiter } from '../rate-limiter.js';
 
+const SECRET = 'test-signing-secret';
+
 describe('executeTool', () => {
   const baseCtx = {
     teamId: 'team-a',
     minionType: 'code-explorer',
+    sessionId: 'sess_1',
     correlationId: 'corr_1',
     attempt: 1,
   };
@@ -42,6 +47,20 @@ describe('executeTool', () => {
     expect(result.status).toBe('blocked_by_allowlist');
     expect(store.listAuditEntries()).toHaveLength(1);
     expect(store.listAuditEntries()[0].status).toBe('blocked_by_allowlist');
+  });
+
+  it('truncates undefined params to the literal string "undefined" in the audit log', async () => {
+    const audit: unknown[] = [];
+    initializeToolshed(
+      createDefaultToolshedState({
+        store: createMemoryStore(),
+        adapters: new Map(),
+        auditLogger: (entry) => audit.push(entry),
+      })
+    );
+    await executeTool(baseCtx, 'github', 'delete_repo', undefined);
+    const entry = audit[0] as { params: string };
+    expect(entry.params).toBe('undefined');
   });
 
   it('handles non-object params', async () => {
@@ -470,13 +489,13 @@ describe('toolshed state', () => {
   });
 });
 
-describe('resolveApproval', () => {
+describe('resolveApprovalRecord (internal — not exposed as an MCP tool, C1 fix)', () => {
   afterEach(() => {
     resetToolshed();
   });
 
   it('returns error when toolshed is not initialized', () => {
-    const result = resolveApproval('appr_1', 'approved');
+    const result = resolveApprovalRecord('appr_1', 'approved', { kind: 'dashboard', id: 'operator_1' });
     expect(result.status).toBe('error');
   });
 
@@ -487,12 +506,12 @@ describe('resolveApproval', () => {
         adapters: new Map(),
       })
     );
-    const result = resolveApproval('missing', 'approved');
+    const result = resolveApprovalRecord('missing', 'approved', { kind: 'dashboard', id: 'operator_1' });
     expect(result.status).toBe('error');
     expect(result.error).toContain('missing');
   });
 
-  it('resolves an existing approval', () => {
+  it('resolves an existing approval and records the operator identity', () => {
     const store = createMemoryStore();
     store.createApproval({
       id: 'appr_1',
@@ -510,9 +529,316 @@ describe('resolveApproval', () => {
         adapters: new Map(),
       })
     );
-    const result = resolveApproval('appr_1', 'approved');
+    const result = resolveApprovalRecord('appr_1', 'approved', { kind: 'slack', id: 'U123' });
     expect(result.status).toBe('success');
     expect(store.getApproval('appr_1')?.decision).toBe('approved');
+    expect(store.getApproval('appr_1')?.approverKind).toBe('slack');
+    expect(store.getApproval('appr_1')?.approverId).toBe('U123');
+  });
+});
+
+describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified token)', () => {
+  afterEach(() => {
+    resetToolshed();
+  });
+
+  it('returns error when toolshed is not initialized', async () => {
+    const result = await verifyAndExecuteTool(
+      { minionToken: 'whatever', correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('Toolshed not initialized');
+  });
+
+  it('executes with a valid token, deriving minionType/sessionId only from the verified payload', async () => {
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'hello' }),
+    });
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        signingSecret: SECRET,
+      })
+    );
+
+    const token = mintMinionToken(
+      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      SECRET
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: token, correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('success');
+    expect(result.data).toEqual({ content: 'hello' });
+    expect(store.listAuditEntries()[0].minionType).toBe('code_explorer');
+  });
+
+  it('blocks a token minted for a minionType lacking the tool (blocked_by_allowlist)', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        signingSecret: SECRET,
+      })
+    );
+
+    // Token minted for a minion type that has no allowlist entry for github
+    // at all — proves the allowlist check runs against the *verified*
+    // minionType, not any caller-supplied value.
+    const token = mintMinionToken(
+      { minionType: 'ticket_analyst', sessionId: 'sess_1', correlationId: 'corr_1' },
+      SECRET
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: token, correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('blocked_by_allowlist');
+  });
+
+  it('rejects a forged/tampered token and audits the rejection (invariant 2)', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        signingSecret: SECRET,
+      })
+    );
+
+    const token = mintMinionToken(
+      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      'wrong-secret'
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: token, correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid minion token');
+
+    // The rejection is itself an audited exit path: no verified identity
+    // exists yet, so the entry is labeled plainly rather than trusting any
+    // caller-supplied minionType/teamId (that trust is the C2 bug).
+    const entries = store.listAuditEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe('error');
+    expect(entries[0].error).toContain('invalid minion token');
+    expect(entries[0].minionType).toBe('unverified');
+  });
+
+  it('survives an audit logger failure on a rejected-token exit path', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    initializeToolshed(
+      createDefaultToolshedState({
+        store: createMemoryStore(),
+        adapters: new Map(),
+        signingSecret: SECRET,
+        auditLogger: async () => {
+          throw new Error('audit sink offline');
+        },
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { minionToken: 'garbage', correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('error');
+    await new Promise<void>((resolve) => process.nextTick(resolve));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('audit sink offline'));
+    consoleSpy.mockRestore();
+  });
+
+  it('survives a synchronous, non-error audit logger failure on a rejected-token exit path', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    initializeToolshed(
+      createDefaultToolshedState({
+        store: createMemoryStore(),
+        adapters: new Map(),
+        signingSecret: SECRET,
+        auditLogger: () => {
+          throw 'string failure';
+        },
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { minionToken: 'garbage', correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('error');
+    await new Promise<void>((resolve) => process.nextTick(resolve));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('string failure'));
+    consoleSpy.mockRestore();
+  });
+
+  it('uses the caller-supplied legacyTeamId alongside a valid token, when present', async () => {
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'hello' }),
+    });
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        signingSecret: SECRET,
+      })
+    );
+
+    const token = mintMinionToken(
+      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      SECRET
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: token, correlationId: 'corr_1', attempt: 1, legacyTeamId: 'team-explicit' },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('success');
+    expect(store.listAuditEntries()[0].teamId).toBe('team-explicit');
+  });
+
+  it('rejects garbage tokens the same way as a forged signature', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        signingSecret: SECRET,
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { minionToken: 'not-a-real-token', correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid minion token');
+  });
+
+  it('rejects any token when no signingSecret is configured (falls back to empty string)', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        // signingSecret intentionally omitted.
+      })
+    );
+
+    const token = mintMinionToken(
+      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      SECRET
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: token, correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid minion token');
+  });
+
+  it('rejects an unsigned call (no minion_token) when the dev flag is off (default)', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        signingSecret: SECRET,
+        allowUnsignedTokens: false,
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { correlationId: 'corr_1', attempt: 1, legacyMinionType: 'code_explorer', legacyTeamId: 'team-a' },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid minion token');
+    expect(store.listAuditEntries()).toHaveLength(1);
+  });
+
+  it('accepts legacy self-reported identity only when TOOLSHED_ALLOW_UNSIGNED dev flag is on', async () => {
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'hello' }),
+    });
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        signingSecret: SECRET,
+        allowUnsignedTokens: true,
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { correlationId: 'corr_1', attempt: 1, legacyMinionType: 'code_explorer', legacyTeamId: 'team-a' },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('success');
+  });
+
+  it('defaults legacy sessionId/teamId when unsigned and none supplied', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+        allowUnsignedTokens: true,
+      })
+    );
+
+    const result = await verifyAndExecuteTool(
+      { correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      {}
+    );
+    expect(result.status).toBe('blocked_by_allowlist');
   });
 });
 

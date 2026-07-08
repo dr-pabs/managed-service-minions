@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { SessionStore, PendingApproval, AuditEntry } from 'framework-core';
+import { verifyMinionToken } from 'framework-core';
 import {
   type AllowlistConfig,
   type GovernanceConfig,
@@ -15,6 +16,12 @@ import type { McpServerAdapter } from './adapter.js';
 export interface ToolContext {
   teamId: string;
   minionType: string;
+  /**
+   * Session identity as verified from the minion token (Milestone 3).
+   * Threaded through so Milestone 6's approval records can key on it
+   * instead of the coarser `teamId` (see ExecPlan Decision Log, M4).
+   */
+  sessionId: string;
   correlationId: string;
   attempt: number;
 }
@@ -36,6 +43,19 @@ export interface ToolshedState {
   rateLimiter: RateLimiter;
   auditLogger: (entry: AuditEntry) => void | Promise<void>;
   circuitBreakerConfig: CircuitBreakerConfig;
+  /**
+   * Shared HMAC secret used to verify minion identity tokens (Milestone 3,
+   * C1/C2 fix). Required to accept a signed `minion_token`; see
+   * `verifyAndExecuteTool`.
+   */
+  signingSecret?: string;
+  /**
+   * Dev-only escape hatch (`TOOLSHED_ALLOW_UNSIGNED=1`): when true, a caller
+   * may fall back to self-reported `minionType`/`teamId`/`sessionId` params
+   * instead of a verified token. Always default-off; every use is logged
+   * loudly by the caller (`server.ts`) at startup.
+   */
+  allowUnsignedTokens: boolean;
 }
 
 let globalState: ToolshedState | undefined;
@@ -98,9 +118,20 @@ function truncate(value: unknown, maxLength: number): string {
   return `${serialized.slice(0, maxLength)}...[truncated]`;
 }
 
-export function resolveApproval(
+/**
+ * Resolves a pending approval and records who decided it. This is
+ * deliberately NOT exposed as an MCP tool (C1 fix, F2): the old
+ * `resolveApproval` was reachable by any minion with no authorization check
+ * at all, making self-approval structurally possible. Callers of this
+ * function are operator-authenticated surfaces only — the Slack/Teams
+ * action handler and the dashboard's approval endpoint (Milestone 4) — each
+ * of which authenticates the human first and then calls this with their
+ * verified identity.
+ */
+export function resolveApprovalRecord(
   approvalId: string,
-  decision: 'approved' | 'denied'
+  decision: 'approved' | 'denied',
+  approver: { kind: 'slack' | 'teams' | 'dashboard'; id: string }
 ): ToolResult {
   const state = globalState;
   if (!state) {
@@ -110,8 +141,100 @@ export function resolveApproval(
   if (!approval) {
     return { status: 'error', error: `Approval ${approvalId} not found` };
   }
-  state.store.resolveApproval(approvalId, decision);
-  return { status: 'success', data: { approvalId, decision } };
+  state.store.resolveApproval(approvalId, decision, approver);
+  return { status: 'success', data: { approvalId, decision, approver } };
+}
+
+/** Caller-supplied identity input to {@link verifyAndExecuteTool}. */
+export interface MinionIdentityInput {
+  /** Signed token minted by the ingress/orchestrator (Milestone 3). Required unless the dev escape hatch is on. */
+  minionToken?: string;
+  correlationId: string;
+  attempt: number;
+  /**
+   * Legacy self-reported identity, honored only when
+   * `ToolshedState.allowUnsignedTokens` is true (dev escape hatch).
+   */
+  legacyMinionType?: string;
+  legacyTeamId?: string;
+  legacySessionId?: string;
+}
+
+function auditRejectedIdentity(state: ToolshedState, input: MinionIdentityInput, error: string): ToolResult {
+  const result: ToolResult = { status: 'error', error };
+  const entry: AuditEntry = {
+    id: `audit_${randomUUID()}`,
+    timestamp: Date.now(),
+    correlationId: input.correlationId,
+    // No verified identity exists for a rejected token: label plainly
+    // rather than trust the unverified caller-supplied value (that trust is
+    // exactly the C2 bug this milestone fixes). This keeps invariant 2 (an
+    // audit entry on every exit path) true even for calls that never reach
+    // a ToolContext.
+    minionType: 'unverified',
+    teamId: 'unverified',
+    serverAlias: 'n/a',
+    toolName: 'n/a',
+    params: undefined,
+    status: result.status,
+    latencyMs: 0,
+    error: result.error,
+  };
+  state.store.createAuditEntry(entry);
+  Promise.resolve()
+    .then(() => state.auditLogger(entry))
+    .catch((err) => {
+      console.error(`[audit] logger failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  return result;
+}
+
+/**
+ * Verifies the minion's identity token and, only on success, runs the
+ * governed pipeline (`executeTool`). This is the only place `minionType`/
+ * `sessionId`/`teamId` are trusted from — never from caller-supplied
+ * params (C2 fix). Verification happens here (inside the pipeline module,
+ * not in `server.ts`) specifically so a rejected token is itself an audited
+ * exit path, per the toolshed's "audit on every exit path" invariant.
+ */
+export async function verifyAndExecuteTool(
+  input: MinionIdentityInput,
+  serverAlias: string,
+  toolName: string,
+  params: unknown
+): Promise<ToolResult> {
+  const state = globalState;
+  if (!state) {
+    return { status: 'error', error: 'Toolshed not initialized' };
+  }
+
+  if (input.minionToken) {
+    const verified = verifyMinionToken(input.minionToken, state.signingSecret ?? '');
+    if (!verified.ok) {
+      return auditRejectedIdentity(state, input, `invalid minion token: ${verified.reason}`);
+    }
+    const ctx: ToolContext = {
+      teamId: input.legacyTeamId ?? verified.payload.sessionId,
+      minionType: verified.payload.minionType,
+      sessionId: verified.payload.sessionId,
+      correlationId: verified.payload.correlationId,
+      attempt: input.attempt,
+    };
+    return executeTool(ctx, serverAlias, toolName, params);
+  }
+
+  if (state.allowUnsignedTokens) {
+    const ctx: ToolContext = {
+      teamId: input.legacyTeamId ?? 'default',
+      minionType: input.legacyMinionType ?? '',
+      sessionId: input.legacySessionId ?? input.legacyTeamId ?? 'default',
+      correlationId: input.correlationId,
+      attempt: input.attempt,
+    };
+    return executeTool(ctx, serverAlias, toolName, params);
+  }
+
+  return auditRejectedIdentity(state, input, 'invalid minion token: no minion_token supplied and unsigned calls are disabled');
 }
 
 export async function executeTool(
@@ -297,6 +420,7 @@ export function createDefaultToolshedState(
       timeoutSecs: 30,
       halfOpenMaxRequests: 1,
     },
+    allowUnsignedTokens: false,
     ...overrides,
   };
 }

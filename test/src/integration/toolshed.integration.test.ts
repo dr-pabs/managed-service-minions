@@ -31,7 +31,7 @@ describe('toolshed integration', () => {
     );
 
     const result = await executeTool(
-      { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 },
+      { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 },
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
@@ -72,7 +72,7 @@ describe('toolshed integration', () => {
       })
     );
 
-    const ctx = { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 };
+    const ctx = { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 };
     await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     const result = await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
 
@@ -99,7 +99,7 @@ describe('toolshed integration', () => {
       })
     );
 
-    const ctx = { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 };
+    const ctx = { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 };
     await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     const result = await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
 
@@ -121,7 +121,7 @@ describe('toolshed integration', () => {
     );
 
     const result = await executeTool(
-      { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 },
+      { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 },
       'github',
       'delete_repo',
       {}

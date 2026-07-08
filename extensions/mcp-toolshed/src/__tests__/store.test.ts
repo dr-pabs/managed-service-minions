@@ -82,6 +82,24 @@ describe('store', () => {
       store.resolveApproval('missing', 'denied');
     });
 
+    it('records the operator identity that resolved an approval (Milestone 3)', () => {
+      const store = createMemoryStore();
+      const approval: PendingApproval = {
+        id: 'a2',
+        sessionId: 's1',
+        correlationId: 'corr_1',
+        serverAlias: 'github',
+        toolName: 'merge_pull_request',
+        paramsJson: '{}',
+        requestedAt: 1,
+        timeoutAt: 2,
+      };
+      store.createApproval(approval);
+      store.resolveApproval('a2', 'approved', { kind: 'slack', id: 'U123' });
+      expect(approval.approverKind).toBe('slack');
+      expect(approval.approverId).toBe('U123');
+    });
+
     it('caches tool calls', () => {
       const store = createMemoryStore();
       store.setCachedToolCall('key', { value: 42 }, 60_000);
@@ -260,7 +278,7 @@ describe('store', () => {
         requestedAt: 1,
         timeoutAt: 2,
       });
-      store.resolveApproval('a1', 'approved');
+      store.resolveApproval('a1', 'approved', { kind: 'dashboard', id: 'operator_1' });
       store.setCachedToolCall('key', { value: 42 }, 60_000);
       expect(store.getCachedToolCall('key')).toEqual({ value: 42 });
 
@@ -310,6 +328,22 @@ describe('store', () => {
       store.resolveApproval('missing', 'denied');
     });
 
+    it('resolves an approval in sqlite with no approver supplied', () => {
+      const prepared = createStatement({
+        get: jest.fn().mockReturnValue({ id: 'a1' }) as unknown as Statement['get'],
+      });
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn().mockReturnValue(prepared),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      store.resolveApproval('a1', 'denied');
+      expect(prepared.run).toHaveBeenCalledWith('denied', expect.any(Number), null, null, 'a1');
+    });
+
     it('retrieves an approval from sqlite', () => {
       const prepared = createStatement({
         get: jest.fn().mockReturnValue({
@@ -323,6 +357,8 @@ describe('store', () => {
           timeout_at: 2,
           decision: 'approved',
           decided_at: 3,
+          approver_kind: 'slack',
+          approver_id: 'U123',
         }) as unknown as Statement['get'],
       });
       const db = {
@@ -334,7 +370,13 @@ describe('store', () => {
 
       const store = createSqliteStore(':memory:', DatabaseCtor);
       const approval = store.getApproval('a1');
-      expect(approval).toMatchObject({ id: 'a1', decision: 'approved', decidedAt: 3 });
+      expect(approval).toMatchObject({
+        id: 'a1',
+        decision: 'approved',
+        decidedAt: 3,
+        approverKind: 'slack',
+        approverId: 'U123',
+      });
     });
 
     it('returns undefined for missing sqlite approvals', () => {

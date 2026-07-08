@@ -7,7 +7,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { executeTool, resolveApproval, createDefaultToolshedState, initializeToolshed, type ToolResult } from './toolshed.js';
+import { verifyAndExecuteTool, createDefaultToolshedState, initializeToolshed, type ToolResult } from './toolshed.js';
 import { loadAllowlists, loadGovernance } from './config.js';
 import { validateConfigAtRoot } from './config-validation.js';
 import { createSqliteStore } from './store.js';
@@ -35,6 +35,11 @@ export interface ToolDefinition {
 
 export { type McpServerAdapter };
 
+// Identity (minionType, sessionId) comes ONLY from the verified minion_token
+// (C1/C2 fix, Milestone 3) — minion_type/team_id are accepted here purely as
+// the dev-only TOOLSHED_ALLOW_UNSIGNED=1 escape hatch; see verifyAndExecuteTool.
+// There is deliberately no resolve_approval tool: see the Decision Log entry
+// on removing that MCP surface entirely (C1's root-cause fix).
 const executeToolDefinition: Tool = {
   name: 'execute_tool',
   description: 'Execute a tool on behalf of a minion through the governed toolshed.',
@@ -42,6 +47,7 @@ const executeToolDefinition: Tool = {
     type: 'object',
     properties: {
       correlation_id: { type: 'string' },
+      minion_token: { type: 'string' },
       team_id: { type: 'string' },
       minion_type: { type: 'string' },
       server_alias: { type: 'string' },
@@ -49,20 +55,7 @@ const executeToolDefinition: Tool = {
       params: { type: 'object' },
       attempt: { type: 'integer' },
     },
-    required: ['correlation_id', 'minion_type', 'server_alias', 'tool_name'],
-  },
-};
-
-const resolveApprovalDefinition: Tool = {
-  name: 'resolve_approval',
-  description: 'Approve or deny a pending destructive-action approval request.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      approval_id: { type: 'string' },
-      decision: { type: 'string', enum: ['approved', 'denied'] },
-    },
-    required: ['approval_id', 'decision'],
+    required: ['correlation_id', 'minion_token', 'server_alias', 'tool_name'],
   },
 };
 
@@ -99,6 +92,34 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
     throw new Error(`[toolshed] config validation failed with ${errors.length} error(s); see log above`);
   }
 
+  // Minion identity tokens (C1/C2 fix, Milestone 3): TOOLSHED_SIGNING_SECRET
+  // must be set in production so execute_tool can verify who is calling.
+  // "Production" is defined the same way Milestone 6 will define it
+  // (NODE_ENV === 'production') so the two startup gates agree; see the
+  // Decision Log entry for why this milestone reuses that flag early.
+  // TOOLSHED_ALLOW_UNSIGNED=1 is a loudly-logged dev escape hatch, default
+  // off, that lets execute_tool fall back to caller-supplied identity params
+  // — never enable it in production.
+  const signingSecret = process.env.TOOLSHED_SIGNING_SECRET;
+  const allowUnsignedTokens = process.env.TOOLSHED_ALLOW_UNSIGNED === '1';
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (!signingSecret && isProduction) {
+    throw new Error(
+      '[toolshed] TOOLSHED_SIGNING_SECRET is required in production (NODE_ENV=production) to verify minion identity tokens'
+    );
+  }
+  if (!signingSecret && !isProduction) {
+    console.warn(
+      '[toolshed] TOOLSHED_SIGNING_SECRET is not set — minion tokens cannot be verified outside TOOLSHED_ALLOW_UNSIGNED=1. This is only acceptable in development.'
+    );
+  }
+  if (allowUnsignedTokens) {
+    console.warn(
+      '[toolshed] TOOLSHED_ALLOW_UNSIGNED=1 is set: execute_tool will accept unverified, caller-supplied minion identity (minion_type/team_id). This is a development-only escape hatch and must never be enabled in production.'
+    );
+  }
+
   const allowlists = loadAllowlists(allowlistsPath);
   const governance = loadGovernance(governancePath);
   const store = createSqliteStore(storePath);
@@ -126,6 +147,8 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
     auditLogger: (entry) => {
       console.log(JSON.stringify({ type: 'audit', ...entry }));
     },
+    signingSecret,
+    allowUnsignedTokens,
   });
 }
 
@@ -139,28 +162,24 @@ export async function startToolshedServer(_port: number): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [executeToolDefinition, resolveApprovalDefinition],
+    tools: [executeToolDefinition],
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const args = request.params.arguments ?? {};
-    let result: ToolResult;
 
-    if (request.params.name === 'resolve_approval') {
-      result = resolveApproval(String(args.approval_id), String(args.decision) as 'approved' | 'denied');
-    } else {
-      result = await executeTool(
-        {
-          teamId: String(args.team_id ?? 'default'),
-          minionType: String(args.minion_type),
-          correlationId: String(args.correlation_id),
-          attempt: Number(args.attempt ?? 1),
-        },
-        String(args.server_alias),
-        String(args.tool_name),
-        args.params
-      );
-    }
+    const result: ToolResult = await verifyAndExecuteTool(
+      {
+        minionToken: args.minion_token === undefined ? undefined : String(args.minion_token),
+        correlationId: String(args.correlation_id),
+        attempt: Number(args.attempt ?? 1),
+        legacyMinionType: args.minion_type === undefined ? undefined : String(args.minion_type),
+        legacyTeamId: args.team_id === undefined ? undefined : String(args.team_id),
+      },
+      String(args.server_alias),
+      String(args.tool_name),
+      args.params
+    );
 
     return {
       content: [{ type: 'text', text: JSON.stringify(result) }],

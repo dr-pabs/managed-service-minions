@@ -58,11 +58,19 @@ export function createMemoryStore(now: () => number = Date.now): SessionStore {
     getApproval(id: string): PendingApproval | undefined {
       return approvals.get(id);
     },
-    resolveApproval(id: string, decision: 'approved' | 'denied'): void {
+    resolveApproval(
+      id: string,
+      decision: 'approved' | 'denied',
+      approver?: { kind: 'slack' | 'teams' | 'dashboard'; id: string }
+    ): void {
       const approval = approvals.get(id);
       if (approval) {
         approval.decision = decision;
-        approval.decidedAt = Date.now();
+        approval.decidedAt = now();
+        if (approver) {
+          approval.approverKind = approver.kind;
+          approval.approverId = approver.id;
+        }
       }
     },
     listPendingApprovals(): PendingApproval[] {
@@ -178,6 +186,24 @@ function migrateCacheInsertedAtColumn(db: BetterSqlite3Database): void {
   }
 }
 
+/**
+ * Additive, guarded migration: adds `approver_kind`/`approver_id` to
+ * `pending_approvals` if missing (Milestone 3 — C1 fix keeps an internal
+ * resolution path that records the operator who decided). Same
+ * PRAGMA-guarded pattern as the two cache migrations above, so re-running
+ * against an existing dev database with the pre-Milestone-3 schema never
+ * fails.
+ */
+function migrateApprovalApproverColumns(db: BetterSqlite3Database): void {
+  const columns = db.prepare('PRAGMA table_info(pending_approvals)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'approver_kind')) {
+    db.exec('ALTER TABLE pending_approvals ADD COLUMN approver_kind TEXT');
+  }
+  if (!columns.some((column) => column.name === 'approver_id')) {
+    db.exec('ALTER TABLE pending_approvals ADD COLUMN approver_id TEXT');
+  }
+}
+
 function initializeSchema(db: BetterSqlite3Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -247,6 +273,7 @@ function initializeSchema(db: BetterSqlite3Database): void {
   `);
   migrateCacheExpiresAtColumn(db);
   migrateCacheInsertedAtColumn(db);
+  migrateApprovalApproverColumns(db);
 }
 
 function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number): SessionStore {
@@ -265,12 +292,14 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
   const selectRunsByCorrelation = db.prepare('SELECT * FROM minion_runs WHERE correlation_id = ?');
   const updateRun = db.prepare('UPDATE minion_runs SET status = ?, result_json = ?, tokens_used = ?, completed_at = ? WHERE id = ?');
   const insertApproval = db.prepare(
-    `INSERT INTO pending_approvals (id, session_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO pending_approvals (id, session_id, correlation_id, server_alias, tool_name, params_json, requested_at, timeout_at, decision, decided_at, approver_kind, approver_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const selectApproval = db.prepare('SELECT * FROM pending_approvals WHERE id = ?');
   const selectPendingApprovals = db.prepare('SELECT * FROM pending_approvals WHERE decision IS NULL');
-  const resolveApprovalStmt = db.prepare('UPDATE pending_approvals SET decision = ?, decided_at = ? WHERE id = ?');
+  const resolveApprovalStmt = db.prepare(
+    'UPDATE pending_approvals SET decision = ?, decided_at = ?, approver_kind = ?, approver_id = ? WHERE id = ?'
+  );
   const insertAuditEntry = db.prepare(
     `INSERT INTO audit_log (id, timestamp, correlation_id, minion_type, team_id, server_alias, tool_name, params, status, latency_ms, error, retry_after_seconds, approval_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -350,17 +379,23 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
         approval.requestedAt,
         approval.timeoutAt,
         approval.decision ?? null,
-        approval.decidedAt ?? null
+        approval.decidedAt ?? null,
+        approval.approverKind ?? null,
+        approval.approverId ?? null
       );
     },
     getApproval(id: string): PendingApproval | undefined {
       const row = selectApproval.get(id) as Record<string, unknown> | undefined;
       return row ? rowToApproval(row) : undefined;
     },
-    resolveApproval(id: string, decision: 'approved' | 'denied'): void {
+    resolveApproval(
+      id: string,
+      decision: 'approved' | 'denied',
+      approver?: { kind: 'slack' | 'teams' | 'dashboard'; id: string }
+    ): void {
       const approval = selectApproval.get(id) as Record<string, unknown> | undefined;
       if (!approval) return;
-      resolveApprovalStmt.run(decision, Date.now(), id);
+      resolveApprovalStmt.run(decision, now(), approver?.kind ?? null, approver?.id ?? null, id);
     },
     listPendingApprovals(): PendingApproval[] {
       const rows = selectPendingApprovals.all() as Record<string, unknown>[];
@@ -459,6 +494,8 @@ function rowToApproval(row: Record<string, unknown>): PendingApproval {
     timeoutAt: Number(row.timeout_at),
     decision: row.decision == null ? undefined : (String(row.decision) as 'approved' | 'denied'),
     decidedAt: row.decided_at == null ? undefined : Number(row.decided_at),
+    approverKind: row.approver_kind == null ? undefined : (String(row.approver_kind) as 'slack' | 'teams' | 'dashboard'),
+    approverId: row.approver_id == null ? undefined : String(row.approver_id),
   };
 }
 

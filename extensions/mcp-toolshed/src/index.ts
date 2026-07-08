@@ -1,6 +1,8 @@
 export { startToolshedServer, type McpServerAdapter } from './server.js';
 export {
   executeTool,
+  verifyAndExecuteTool,
+  resolveApprovalRecord,
   initializeToolshed,
   resetToolshed,
   getToolshedState,
@@ -8,6 +10,7 @@ export {
   type ToolContext,
   type ToolResult,
   type ToolshedState,
+  type MinionIdentityInput,
 } from './toolshed.js';
 export {
   createSqliteStore,

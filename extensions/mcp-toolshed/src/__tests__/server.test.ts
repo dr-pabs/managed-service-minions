@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { jest } from '@jest/globals';
 import { resetToolshed } from '../toolshed.js';
+import { mintMinionToken } from 'framework-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +34,8 @@ MockTransport.mockImplementation(() => ({}));
 
 const { parseAdapterConfigs, buildToolshedState, startToolshedServer } = await import('../server.js');
 
+const SECRET = 'test-signing-secret';
+
 describe('server', () => {
   let tmpDir: string;
 
@@ -43,6 +46,7 @@ describe('server', () => {
     mockConnect.mockClear();
     mockCreateMcpAdapter.mockClear();
     mockConnect.mockResolvedValue(undefined);
+    process.env.TOOLSHED_SIGNING_SECRET = SECRET;
   });
 
   afterEach(() => {
@@ -52,6 +56,9 @@ describe('server', () => {
     delete process.env.TOOLSHED_STORE_PATH;
     delete process.env.TOOLSHED_ADAPTERS;
     delete process.env.TOOLSHED_REPO_ROOT;
+    delete process.env.TOOLSHED_SIGNING_SECRET;
+    delete process.env.TOOLSHED_ALLOW_UNSIGNED;
+    delete process.env.NODE_ENV;
     resetToolshed();
   });
 
@@ -94,6 +101,8 @@ describe('server', () => {
       const state = await buildToolshedState();
       expect(state.governance.approvalTimeoutMinutes).toBe(5);
       expect(state.allowlists.allowlists.code_explorer.github).toContain('get_file_contents');
+      expect(state.signingSecret).toBe(SECRET);
+      expect(state.allowUnsignedTokens).toBe(false);
     });
 
     it('connects adapters from environment config', async () => {
@@ -176,6 +185,38 @@ describe('server', () => {
       errorSpy.mockRestore();
       delete process.env.TOOLSHED_REPO_ROOT;
     });
+
+    it('throws at startup when TOOLSHED_SIGNING_SECRET is unset in production', async () => {
+      delete process.env.TOOLSHED_SIGNING_SECRET;
+      process.env.NODE_ENV = 'production';
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+
+      await expect(buildToolshedState()).rejects.toThrow(/TOOLSHED_SIGNING_SECRET is required in production/i);
+    });
+
+    it('warns loudly but continues when TOOLSHED_SIGNING_SECRET is unset outside production', async () => {
+      delete process.env.TOOLSHED_SIGNING_SECRET;
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const state = await buildToolshedState();
+      expect(state.signingSecret).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('TOOLSHED_SIGNING_SECRET is not set'));
+
+      warnSpy.mockRestore();
+    });
+
+    it('warns loudly when TOOLSHED_ALLOW_UNSIGNED=1 is set', async () => {
+      process.env.TOOLSHED_ALLOW_UNSIGNED = '1';
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const state = await buildToolshedState();
+      expect(state.allowUnsignedTokens).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('TOOLSHED_ALLOW_UNSIGNED=1'));
+
+      warnSpy.mockRestore();
+    });
   });
 
   describe('startToolshedServer', () => {
@@ -185,26 +226,26 @@ describe('server', () => {
       expect(mockSetRequestHandler).toHaveBeenCalledTimes(2);
     });
 
-    it('invokes the ListTools handler', async () => {
+    it('invokes the ListTools handler and no longer exposes resolve_approval (C1 regression)', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
       await startToolshedServer(3000);
       const listToolsHandler = mockSetRequestHandler.mock.calls[0][1] as (req: unknown) => Promise<{ tools: Array<{ name: string }> }>;
       const response = await listToolsHandler?.({});
-      expect(response.tools).toHaveLength(2);
+      expect(response.tools).toHaveLength(1);
       expect(response.tools.map((t) => t.name)).toContain('execute_tool');
-      expect(response.tools.map((t) => t.name)).toContain('resolve_approval');
+      expect(response.tools.map((t) => t.name)).not.toContain('resolve_approval');
     });
 
-    it('invokes the CallTool handler', async () => {
+    it('invokes the CallTool handler with a valid minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
       await startToolshedServer(3000);
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, SECRET);
       const response = await callToolHandler?.({
         params: {
           arguments: {
             correlation_id: 'corr_1',
-            team_id: 'team-a',
-            minion_type: 'code-explorer',
+            minion_token: token,
             server_alias: 'github',
             tool_name: 'get_file_contents',
             params: { path: '/repo/readme.md' },
@@ -212,10 +253,14 @@ describe('server', () => {
         },
       });
       expect(response).toBeDefined();
-      expect(response.content[0].text).toContain('error');
+      // No allowlists.yaml is configured (default env), so this reaches the
+      // pipeline (past identity verification) and is blocked by the
+      // allowlist step — proving the token was verified and accepted, not
+      // merely that some error occurred.
+      expect(response.content[0].text).toContain('blocked_by_allowlist');
     });
 
-    it('invokes the CallTool handler without optional params', async () => {
+    it('invokes the CallTool handler without a minion token and rejects the call', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
       await startToolshedServer(3000);
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
@@ -223,13 +268,12 @@ describe('server', () => {
         params: {
           arguments: {
             correlation_id: 'corr_1',
-            minion_type: 'code-explorer',
             server_alias: 'github',
             tool_name: 'get_file_contents',
           },
         },
       });
-      expect(response.content[0].text).toContain('error');
+      expect(response.content[0].text).toContain('invalid minion token');
     });
 
     it('invokes the CallTool handler without arguments', async () => {
@@ -237,24 +281,49 @@ describe('server', () => {
       await startToolshedServer(3000);
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({ params: {} });
-      expect(response.content[0].text).toContain('error');
+      expect(response.content[0].text).toContain('invalid minion token');
     });
 
-    it('invokes the resolve_approval handler', async () => {
+    it('rejects a forged/tampered minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
       await startToolshedServer(3000);
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, 'wrong-secret');
       const response = await callToolHandler?.({
         params: {
-          name: 'resolve_approval',
           arguments: {
-            approval_id: 'appr_1',
-            decision: 'approved',
+            correlation_id: 'corr_1',
+            minion_token: token,
+            server_alias: 'github',
+            tool_name: 'get_file_contents',
+            params: { path: '/repo/readme.md' },
           },
         },
       });
-      expect(response.content[0].text).toContain('error');
-      expect(response.content[0].text).toContain('appr_1');
+      expect(response.content[0].text).toContain('invalid minion token');
+    });
+
+    it('accepts legacy minion_type/team_id params only when TOOLSHED_ALLOW_UNSIGNED=1', async () => {
+      resetToolshed();
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      process.env.TOOLSHED_ALLOW_UNSIGNED = '1';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      await startToolshedServer(3000);
+      warnSpy.mockRestore();
+      const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const response = await callToolHandler?.({
+        params: {
+          arguments: {
+            correlation_id: 'corr_1',
+            team_id: 'team-a',
+            minion_type: 'code_explorer',
+            server_alias: 'github',
+            tool_name: 'get_file_contents',
+            params: { path: '/repo/readme.md' },
+          },
+        },
+      });
+      expect(response.content[0].text).toContain('blocked_by_allowlist');
     });
   });
 });
