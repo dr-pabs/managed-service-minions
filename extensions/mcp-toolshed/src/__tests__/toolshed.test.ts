@@ -13,8 +13,14 @@ import {
 import { createMemoryStore } from '../store.js';
 import { createMockAdapter } from '../adapter.js';
 import { TokenBucketRateLimiter } from '../rate-limiter.js';
+import { loadAllowlists, loadGovernance } from '../config.js';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SECRET = 'test-signing-secret';
+const here = path.dirname(fileURLToPath(import.meta.url));
+// extensions/mcp-toolshed/src/__tests__ -> repo root is four levels up.
+const REPO_ROOT = path.resolve(here, '../../../../');
 
 describe('executeTool', () => {
   const baseCtx = {
@@ -123,6 +129,57 @@ describe('executeTool', () => {
     );
     const result = await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
     expect(result.status).toBe('throttled');
+  });
+
+  describe('per-server rate limits (H4)', () => {
+    // Loaded from the REAL rules/allowlists.yaml and rules/governance.yaml —
+    // not a fixture — so this proves the shipped config's github: 30/min
+    // per-server limit is actually enforced, not just parsed. code_explorer
+    // is granted two DIFFERENT github tools (github_get_pull_request and
+    // github_get_pull_request_diff); calling across both must still share
+    // ONE per-server bucket keyed on the server alias, not the fine-grained
+    // team:minion:server:tool bucket (whose default 60/min would never
+    // throttle in 31 calls).
+    it('throttles the 31st rapid call across two different github tools on the shared per-server bucket', async () => {
+      const allowlists = loadAllowlists(path.join(REPO_ROOT, 'rules', 'allowlists.yaml'));
+      const governance = loadGovernance(path.join(REPO_ROOT, 'rules', 'governance.yaml'));
+      expect(governance.rateLimits.github).toEqual({ requestsPerMinute: 30, burst: 10 });
+
+      initializeToolshed(
+        createDefaultToolshedState({
+          store: createMemoryStore(),
+          adapters: new Map([
+            ['github', createMockAdapter('github', { callTool: async () => ({ ok: true }) })],
+          ]),
+          allowlists,
+          governance,
+        })
+      );
+
+      const calls: Array<'get' | 'diff'> = [];
+      for (let i = 0; i < 15; i++) {
+        calls.push('get', 'diff');
+      }
+      calls.push('get'); // 31st call total
+
+      const results = [];
+      for (const which of calls) {
+        const toolName = which === 'get' ? 'github_get_pull_request' : 'github_get_pull_request_diff';
+        results.push(
+          await executeTool({ ...baseCtx, minionType: 'code_explorer' }, 'github', toolName, { number: 1 })
+        );
+      }
+
+      expect(results).toHaveLength(31);
+      // burst: 10 means the server bucket throttles once its 10 tokens are
+      // exhausted (refill is real-time-based and negligible across a tight
+      // synchronous loop); what H4 proves is that the bucket is SHARED
+      // across both github tool names, not per-tool — some call among the
+      // 31 alternating get/diff calls is throttled, and specifically the
+      // 31st (well past the shared 10-token capacity) always is.
+      expect(results.filter((r) => r.status === 'throttled').length).toBeGreaterThan(0);
+      expect(results[30].status).toBe('throttled');
+    });
   });
 
   it('throttles when circuit breaker is open', async () => {

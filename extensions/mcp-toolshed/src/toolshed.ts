@@ -389,6 +389,27 @@ export async function executeTool(
     });
   }
 
+  // Per-server bucket (H4 fix): governance.yaml's rate_limits block sets a
+  // limit per server alias (e.g. github: 30/min) that applies across EVERY
+  // tool on that server, not per-tool — a minion hammering two different
+  // github tools must still be throttled by the shared github bucket. Falls
+  // back to the `default` entry when no per-server entry is configured.
+  const serverRateKey = `server:${serverAlias}`;
+  const serverRateLimit = toolshedState.governance.rateLimits[serverAlias] ?? toolshedState.governance.rateLimits.default;
+  if (serverRateLimit) {
+    const serverThrottle = toolshedState.rateLimiter.canExecuteWithLimit(serverRateKey, serverRateLimit);
+    if (!serverThrottle.allowed) {
+      return emit({
+        status: 'throttled',
+        error: 'Rate limit exceeded',
+        retryAfterSeconds: serverThrottle.retryAfterSeconds,
+      });
+    }
+  }
+
+  // Fine-grained bucket (pre-existing): team:minion:server:tool, using the
+  // `default` limit. Kept in addition to the per-server bucket above, per
+  // the pinned enforcement order — both are checked at the rate-limit step.
   const rateKey = `${ctx.teamId}:${ctx.minionType}:${serverAlias}:${toolName}`;
   const rateLimit = toolshedState.rateLimiter.canExecute(rateKey);
   if (!rateLimit.allowed) {
