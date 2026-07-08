@@ -183,10 +183,20 @@ describe('executeTool', () => {
   });
 
   it('throttles when circuit breaker is open', async () => {
+    // Uses a REGISTERED adapter whose callTool throws — a genuine downstream
+    // failure — rather than an unregistered/unknown alias: since M2, an
+    // unknown-alias config error never trips the breaker (see the M2
+    // describe block below), so this test's premise must be a real
+    // downstream failure to still exercise the breaker-open path.
+    const failingAdapter = createMockAdapter('filesystem', {
+      callTool: async () => {
+        throw new Error('downstream unavailable');
+      },
+    });
     initializeToolshed(
       createDefaultToolshedState({
         store: createMemoryStore(),
-        adapters: new Map(),
+        adapters: new Map([['filesystem', failingAdapter]]),
         allowlists: {
           allowlists: { code_explorer: { filesystem: ['read_file'] } },
           pathScopes: {},
@@ -648,6 +658,70 @@ describe('executeTool', () => {
     const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     expect(result.status).toBe('error');
     expect(result.error).toContain('Unknown MCP server alias');
+  });
+
+  describe('unknown-alias config errors do not trip circuit breakers (M2)', () => {
+    it('five calls with a bad alias leave the real alias breaker CLOSED and unaffected', async () => {
+      const breakers = new Map();
+      const circuitBreakerConfig = {
+        failureThreshold: 3,
+        successThreshold: 1,
+        timeoutSecs: 30,
+        halfOpenMaxRequests: 1,
+      };
+      const workingAdapter = createMockAdapter('github', { callTool: async () => ({ ok: true }) });
+      initializeToolshed(
+        createDefaultToolshedState({
+          store: createMemoryStore(),
+          adapters: new Map([['github', workingAdapter]]),
+          allowlists: {
+            allowlists: {
+              code_explorer: {
+                nonexistent_server: ['some_tool'],
+                github: ['get_file_contents'],
+              },
+            },
+            pathScopes: {},
+            shellCommands: {},
+          },
+          breakers,
+          circuitBreakerConfig,
+        })
+      );
+
+      // Five calls against a server alias with no registered adapter — a
+      // config error (misconfiguration), not a downstream health signal.
+      // Every one must return the config error itself, never 'throttled' —
+      // if a breaker recorded these as failures it would trip after 3 (this
+      // config's failureThreshold) and calls 4-5 would come back
+      // 'throttled' (circuit breaker is open) instead of the real error.
+      for (let i = 0; i < 5; i++) {
+        const result = await executeTool(baseCtx, 'nonexistent_server', 'some_tool', {});
+        expect(result.status).toBe('error');
+        expect(result.error).toContain('Unknown MCP server alias');
+      }
+
+      // The bad alias's own breaker (however it might be keyed) must not
+      // have tripped from config errors alone.
+      const badAliasBreaker = breakers.get('nonexistent_server');
+      if (badAliasBreaker) {
+        expect(badAliasBreaker.state).toBe('closed');
+      }
+
+      // The real alias's breaker — keyed on serverAlias alone (M2 re-keying;
+      // previously server:tool) — must be a totally separate breaker,
+      // unaffected by the bad-alias calls, and still closed/executable.
+      const realResult = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/x' });
+      expect(realResult.status).toBe('success');
+      const realBreaker = breakers.get('github');
+      expect(realBreaker).toBeDefined();
+      expect(realBreaker!.state).toBe('closed');
+      // Re-keying assertion: the breaker for the real alias is NOT keyed
+      // server:tool (the pre-M2 keying) — a per-tool key would create a
+      // distinct breaker per tool name sharing the same server connection,
+      // which M2 explicitly replaces with a single per-server-alias breaker.
+      expect(breakers.has('github:get_file_contents')).toBe(false);
+    });
   });
 
   it('executes a tool marked cacheable through an adapter and caches the result', async () => {

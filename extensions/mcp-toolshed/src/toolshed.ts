@@ -420,7 +420,13 @@ export async function executeTool(
     });
   }
 
-  const breakerKey = `${serverAlias}:${toolName}`;
+  // Breakers are keyed on serverAlias ALONE (M2 fix), not server:tool: every
+  // tool on a server shares the same underlying connection (adapter
+  // process), so tripping per-tool would let a failing tool keep hammering
+  // an already-unhealthy server connection via its sibling tools' still
+  // separately-tracked, still-closed breakers. See README.md for the same
+  // statement kept in sync.
+  const breakerKey = serverAlias;
   const breaker = getBreaker(toolshedState.breakers, toolshedState.circuitBreakerConfig, breakerKey);
   if (!breaker.canExecute()) {
     return emit({
@@ -556,7 +562,11 @@ async function doExecuteTool(
 
   const adapter = state.adapters.get(serverAlias);
   if (!adapter) {
-    breaker.recordFailure();
+    // M2 fix: an unknown/unregistered server alias is a CONFIG error (the
+    // allowlist grants a server with no adapter wired up), not a downstream
+    // health signal — it must never feed the circuit breaker. Recording it
+    // as a failure would eventually trip the breaker for a server that may
+    // be perfectly healthy, purely from repeated misconfigured calls.
     return { status: 'error', error: `Unknown MCP server alias: ${serverAlias}` };
   }
 
