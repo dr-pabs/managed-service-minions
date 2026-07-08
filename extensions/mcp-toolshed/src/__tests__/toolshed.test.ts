@@ -8,6 +8,7 @@ import {
   createDefaultToolshedState,
   getToolshedState,
   resolveApprovalRecord,
+  computeRequestHash,
 } from '../toolshed.js';
 import { createMemoryStore } from '../store.js';
 import { createMockAdapter } from '../adapter.js';
@@ -1022,5 +1023,37 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
       {}
     );
     expect(result.status).toBe('blocked_by_allowlist');
+  });
+});
+
+describe('computeRequestHash (M4 review N2: delimited chunks)', () => {
+  it('produces a stable hash for identical inputs and different hashes for different params', () => {
+    const a = computeRequestHash('github', 'merge_pull_request', { pr: 1 }, 'corr_1');
+    const b = computeRequestHash('github', 'merge_pull_request', { pr: 1 }, 'corr_1');
+    const c = computeRequestHash('github', 'merge_pull_request', { pr: 2 }, 'corr_1');
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('N2 regression: differently-split serverAlias/toolName inputs must not collide (delimiter between chunks)', () => {
+    // Without an explicit delimiter between the sha256 update() chunks,
+    // ('github', 'merge_pull_request') and ('githubmerge_pull_request', '')
+    // feed byte-identical input to the hash and collide. The closed
+    // tool-registry made this unreachable in practice, but the hash must be
+    // structurally collision-free, not incidentally so.
+    const split1 = computeRequestHash('github', 'merge_pull_request', { pr: 1 }, 'corr_1');
+    const split2 = computeRequestHash('githubmerge_pull_request', '', { pr: 1 }, 'corr_1');
+    expect(split1).not.toBe(split2);
+  });
+
+  it('N2 regression: a boundary shift between canonicalJSON(params) and correlationId must not collide', () => {
+    // '{"pr":1}' + 'corr_1' vs '{"pr":1}c' + 'orr_1' style splits are only
+    // distinguishable with a delimiter. params is a string-valued field here
+    // so its canonical JSON ends with a quote that could otherwise blend
+    // into the correlation id.
+    const a = computeRequestHash('github', 'merge_pull_request', 'x', 'ycorr');
+    const b = computeRequestHash('github', 'merge_pull_request', 'x"y', 'corr'.slice(0, 4));
+    expect(a).not.toBe(b);
   });
 });

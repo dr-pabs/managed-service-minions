@@ -92,7 +92,7 @@ describe('startOperatorHttpServer (Milestone 4, H3/F1 — the operator surface s
     expect(response.body).toHaveLength(1);
   });
 
-  it('POST /approvals/:id/resolve approves a pending approval and records the operator identity', async () => {
+  it('POST /approvals/:id/resolve approves a pending approval, defaulting approverKind to dashboard when absent', async () => {
     store.createApproval({
       id: 'a1',
       sessionId: 's1',
@@ -114,6 +114,38 @@ describe('startOperatorHttpServer (Milestone 4, H3/F1 — the operator surface s
     expect(store.getApproval('a1')?.decision).toBe('approved');
     expect(store.getApproval('a1')?.approverKind).toBe('dashboard');
     expect(store.getApproval('a1')?.approverId).toBe('operator_1');
+  });
+
+  it('POST /approvals/:id/resolve records the approverKind supplied in the body (M4 review N1: slack is not dashboard)', async () => {
+    store.createApproval({
+      id: 'a_slack',
+      sessionId: 's1',
+      correlationId: 'corr_1',
+      serverAlias: 'github',
+      toolName: 'merge_pull_request',
+      paramsJson: '{}',
+      requestedAt: 1,
+      timeoutAt: 999_999_999_999,
+      requestHash: 'hash_slack',
+    });
+
+    const response = await request(server.port, 'POST', '/approvals/a_slack/resolve', {
+      token: OPERATOR_TOKEN,
+      body: { decision: 'approved', approverId: 'U123', approverKind: 'slack' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(store.getApproval('a_slack')?.approverKind).toBe('slack');
+    expect(store.getApproval('a_slack')?.approverId).toBe('U123');
+  });
+
+  it('POST /approvals/:id/resolve rejects an approverKind outside slack|teams|dashboard (400)', async () => {
+    const response = await request(server.port, 'POST', '/approvals/a1/resolve', {
+      token: OPERATOR_TOKEN,
+      body: { decision: 'approved', approverId: 'U123', approverKind: 'minion' },
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "approverKind must be 'slack', 'teams', or 'dashboard'" });
   });
 
   it('POST /approvals/:id/resolve denies a pending approval', async () => {

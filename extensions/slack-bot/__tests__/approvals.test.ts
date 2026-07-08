@@ -93,7 +93,7 @@ describe('approvalNotifier wiring (fake poster, Milestone 4 acceptance: "one wir
 });
 
 describe('createHttpOperatorClient', () => {
-  it('POSTs to the toolshed operator endpoint with a bearer token and returns the parsed body', async () => {
+  it('POSTs to the toolshed operator endpoint with a bearer token, sending approverKind so a Slack decision is never audited as dashboard (M4 review N1)', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({
       json: async () => ({ status: 'success' }),
     }) as unknown as typeof fetch;
@@ -107,7 +107,7 @@ describe('createHttpOperatorClient', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer op-token' }),
-        body: JSON.stringify({ decision: 'approved', approverId: 'U123' }),
+        body: JSON.stringify({ decision: 'approved', approverId: 'U123', approverKind: 'slack' }),
       })
     );
   });

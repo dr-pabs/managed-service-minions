@@ -104,7 +104,18 @@ export function getToolshedState(): ToolshedState | undefined {
  * (same server/tool/params/correlation) hashes identically regardless of
  * incidental key ordering in `params` — see `canonicalJson` in
  * `framework-core` for why plain `JSON.stringify` is not good enough.
+ *
+ * A NUL byte delimits the four chunks (M4 review finding N2): without it,
+ * differently-split inputs like ('github', 'merge_x') and ('githubmerge_x',
+ * '') feed byte-identical data to the hash and collide. None of the chunk
+ * values can contain a NUL (server aliases/tool names come from the
+ * validated registry, canonical JSON escapes control characters as \\u0000,
+ * correlation IDs are dot-separated tokens), so the delimiter makes such
+ * splits structurally incapable of colliding rather than incidentally
+ * prevented by the closed registry.
  */
+const HASH_DELIMITER = '\0';
+
 export function computeRequestHash(
   serverAlias: string,
   toolName: string,
@@ -113,8 +124,11 @@ export function computeRequestHash(
 ): string {
   return createHash('sha256')
     .update(serverAlias)
+    .update(HASH_DELIMITER)
     .update(toolName)
+    .update(HASH_DELIMITER)
     .update(canonicalJson(params))
+    .update(HASH_DELIMITER)
     .update(correlationId)
     .digest('hex');
 }

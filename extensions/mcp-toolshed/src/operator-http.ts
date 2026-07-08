@@ -74,7 +74,7 @@ export async function startOperatorHttpServer(
       if (req.method === 'POST' && resolveMatch) {
         const approvalId = decodeURIComponent(resolveMatch[1]);
         const bodyText = await readBody(req);
-        let body: { decision?: string; approverId?: string } = {};
+        let body: { decision?: string; approverId?: string; approverKind?: string } = {};
         try {
           body = bodyText ? (JSON.parse(bodyText) as typeof body) : {};
         } catch {
@@ -89,8 +89,17 @@ export async function startOperatorHttpServer(
           jsonResponse(res, 400, { error: 'approverId is required' });
           return;
         }
+        // M4 review finding N1: the caller says which operator surface it is
+        // (the Slack/Teams action handlers send their own kind), validated
+        // against the closed set; absent means the dashboard's own direct
+        // call, the only caller that historically omitted it.
+        const approverKind = body.approverKind ?? 'dashboard';
+        if (approverKind !== 'slack' && approverKind !== 'teams' && approverKind !== 'dashboard') {
+          jsonResponse(res, 400, { error: "approverKind must be 'slack', 'teams', or 'dashboard'" });
+          return;
+        }
         const result = resolveApprovalRecord(approvalId, body.decision, {
-          kind: 'dashboard',
+          kind: approverKind,
           id: body.approverId,
         });
         jsonResponse(res, result.status === 'success' ? 200 : 404, result);

@@ -107,7 +107,10 @@ export function createHttpOperatorClient(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${operatorToken}`,
         },
-        body: JSON.stringify({ decision, approverId: approver.id }),
+        // approverKind identifies the operator surface (M4 review N1): without
+        // it, the toolshed's endpoint defaulted every resolution to
+        // 'dashboard' and Slack decisions were mis-audited.
+        body: JSON.stringify({ decision, approverId: approver.id, approverKind: approver.kind }),
       });
       const body = (await response.json()) as { status: string; error?: string };
       return body;
