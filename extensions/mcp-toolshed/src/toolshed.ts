@@ -152,29 +152,42 @@ export interface MinionIdentityInput {
   correlationId: string;
   attempt: number;
   /**
-   * Legacy self-reported identity, honored only when
-   * `ToolshedState.allowUnsignedTokens` is true (dev escape hatch).
+   * Legacy self-reported identity, honored ONLY on the unsigned dev path
+   * (`ToolshedState.allowUnsignedTokens` true AND no `minionToken`
+   * supplied). When a valid token is present, every one of these is
+   * ignored — trusting any of them alongside a token would let a caller
+   * with a legitimately minted token still choose its own `teamId`
+   * (rate-limit bucket, cache key, approval sessionId, audit teamId),
+   * reopening C2.
    */
   legacyMinionType?: string;
   legacyTeamId?: string;
   legacySessionId?: string;
 }
 
-function auditRejectedIdentity(state: ToolshedState, input: MinionIdentityInput, error: string): ToolResult {
+function auditRejectedIdentity(
+  state: ToolshedState,
+  input: MinionIdentityInput,
+  serverAlias: string,
+  toolName: string,
+  error: string
+): ToolResult {
   const result: ToolResult = { status: 'error', error };
   const entry: AuditEntry = {
     id: `audit_${randomUUID()}`,
     timestamp: Date.now(),
     correlationId: input.correlationId,
-    // No verified identity exists for a rejected token: label plainly
-    // rather than trust the unverified caller-supplied value (that trust is
-    // exactly the C2 bug this milestone fixes). This keeps invariant 2 (an
-    // audit entry on every exit path) true even for calls that never reach
-    // a ToolContext.
+    // No verified identity exists for a rejected token: label the identity
+    // fields plainly rather than trust the unverified caller-supplied value
+    // (that trust is exactly the C2 bug this milestone fixes). The TARGET of
+    // the call (serverAlias/toolName) is known regardless of identity and is
+    // recorded so an investigator can see which tool a forged caller was
+    // aiming at. This keeps invariant 2 (an audit entry on every exit path)
+    // true even for calls that never reach a ToolContext.
     minionType: 'unverified',
     teamId: 'unverified',
-    serverAlias: 'n/a',
-    toolName: 'n/a',
+    serverAlias,
+    toolName,
     params: undefined,
     status: result.status,
     latencyMs: 0,
@@ -191,11 +204,14 @@ function auditRejectedIdentity(state: ToolshedState, input: MinionIdentityInput,
 
 /**
  * Verifies the minion's identity token and, only on success, runs the
- * governed pipeline (`executeTool`). This is the only place `minionType`/
- * `sessionId`/`teamId` are trusted from — never from caller-supplied
- * params (C2 fix). Verification happens here (inside the pipeline module,
- * not in `server.ts`) specifically so a rejected token is itself an audited
- * exit path, per the toolshed's "audit on every exit path" invariant.
+ * governed pipeline (`executeTool`). On the verified branch every identity
+ * field of `ToolContext` — `minionType`, `sessionId`, `correlationId`, and
+ * `teamId` (derived from the token's `sessionId`; see the ExecPlan Decision
+ * Log) — comes exclusively from the verified payload; caller-supplied
+ * `legacy*` values are ignored (C2 fix). Verification happens here (inside
+ * the pipeline module, not in `server.ts`) specifically so a rejected token
+ * is itself an audited exit path, per the toolshed's "audit on every exit
+ * path" invariant.
  */
 export async function verifyAndExecuteTool(
   input: MinionIdentityInput,
@@ -209,12 +225,29 @@ export async function verifyAndExecuteTool(
   }
 
   if (input.minionToken) {
-    const verified = verifyMinionToken(input.minionToken, state.signingSecret ?? '');
+    // Refuse outright when no secret is configured: HMAC with an empty key
+    // is still a valid MAC, so falling back to '' would VERIFY any token an
+    // attacker minted with the empty string — "operator forgot the secret"
+    // must fail closed, not open.
+    if (!state.signingSecret) {
+      return auditRejectedIdentity(
+        state,
+        input,
+        serverAlias,
+        toolName,
+        'invalid minion token: no signing secret is configured, token cannot be verified'
+      );
+    }
+    const verified = verifyMinionToken(input.minionToken, state.signingSecret);
     if (!verified.ok) {
-      return auditRejectedIdentity(state, input, `invalid minion token: ${verified.reason}`);
+      return auditRejectedIdentity(state, input, serverAlias, toolName, `invalid minion token: ${verified.reason}`);
     }
     const ctx: ToolContext = {
-      teamId: input.legacyTeamId ?? verified.payload.sessionId,
+      // teamId is derived from the token's sessionId, never from
+      // input.legacyTeamId — the token payload stays at the pinned
+      // three-field format {minionType, sessionId, correlationId}, and
+      // Milestone 6 (M4) adds a distinct teamId to approval records.
+      teamId: verified.payload.sessionId,
       minionType: verified.payload.minionType,
       sessionId: verified.payload.sessionId,
       correlationId: verified.payload.correlationId,
@@ -234,7 +267,13 @@ export async function verifyAndExecuteTool(
     return executeTool(ctx, serverAlias, toolName, params);
   }
 
-  return auditRejectedIdentity(state, input, 'invalid minion token: no minion_token supplied and unsigned calls are disabled');
+  return auditRejectedIdentity(
+    state,
+    input,
+    serverAlias,
+    toolName,
+    'invalid minion token: no minion_token supplied and unsigned calls are disabled'
+  );
 }
 
 export async function executeTool(

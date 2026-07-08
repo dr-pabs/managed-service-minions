@@ -639,13 +639,19 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     expect(result.error).toContain('invalid minion token');
 
     // The rejection is itself an audited exit path: no verified identity
-    // exists yet, so the entry is labeled plainly rather than trusting any
-    // caller-supplied minionType/teamId (that trust is the C2 bug).
+    // exists yet, so the identity fields are labeled plainly rather than
+    // trusting any caller-supplied minionType/teamId (that trust is the C2
+    // bug) — but the TARGET of the forged call (serverAlias/toolName) is
+    // known and must be recorded so an investigator can see which tool a
+    // forged caller was aiming at.
     const entries = store.listAuditEntries();
     expect(entries).toHaveLength(1);
     expect(entries[0].status).toBe('error');
     expect(entries[0].error).toContain('invalid minion token');
     expect(entries[0].minionType).toBe('unverified');
+    expect(entries[0].teamId).toBe('unverified');
+    expect(entries[0].serverAlias).toBe('github');
+    expect(entries[0].toolName).toBe('get_file_contents');
   });
 
   it('survives an audit logger failure on a rejected-token exit path', async () => {
@@ -698,7 +704,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     consoleSpy.mockRestore();
   });
 
-  it('uses the caller-supplied legacyTeamId alongside a valid token, when present', async () => {
+  it('IGNORES caller-supplied legacyTeamId when a valid token is present (C2: identity comes only from the token)', async () => {
     const adapter = createMockAdapter('github', {
       callTool: async () => ({ content: 'hello' }),
     });
@@ -719,14 +725,19 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
       { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
       SECRET
     );
+    // An attacker-chosen team_id must NOT become ctx.teamId on the verified
+    // path: teamId drives the rate-limit bucket key, the cache key, the
+    // persisted approval's sessionId, and the audit teamId — letting the
+    // caller pick it would reopen C2 even with a valid token in hand.
     const result = await verifyAndExecuteTool(
-      { minionToken: token, correlationId: 'corr_1', attempt: 1, legacyTeamId: 'team-explicit' },
+      { minionToken: token, correlationId: 'corr_1', attempt: 1, legacyTeamId: 'attacker-chosen-team' },
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
     );
     expect(result.status).toBe('success');
-    expect(store.listAuditEntries()[0].teamId).toBe('team-explicit');
+    expect(store.listAuditEntries()[0].teamId).toBe('sess_1');
+    expect(store.listAuditEntries()[0].teamId).not.toBe('attacker-chosen-team');
   });
 
   it('rejects garbage tokens the same way as a forged signature', async () => {
@@ -749,7 +760,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     expect(result.error).toContain('invalid minion token');
   });
 
-  it('rejects any token when no signingSecret is configured (falls back to empty string)', async () => {
+  it('rejects any token outright when no signingSecret is configured', async () => {
     const store = createMemoryStore();
     initializeToolshed(
       createDefaultToolshedState({
@@ -771,6 +782,44 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
     expect(result.status).toBe('error');
     expect(result.error).toContain('invalid minion token');
+    expect(result.error).toContain('no signing secret');
+  });
+
+  it('N2 regression: a token minted with the EMPTY key must not verify when signingSecret is unset', async () => {
+    // HMAC with an empty key is still a valid MAC: without an explicit
+    // falsy-secret rejection, `verifyMinionToken(token, secret ?? '')` would
+    // happily accept a token an attacker minted with the empty string —
+    // turning "operator forgot to set the secret" into "anyone can mint
+    // valid identities".
+    const adapter = createMockAdapter('github', {
+      callTool: async () => ({ content: 'should never be reached' }),
+    });
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+        },
+        // signingSecret intentionally omitted.
+      })
+    );
+
+    const emptyKeyToken = mintMinionToken(
+      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      ''
+    );
+    const result = await verifyAndExecuteTool(
+      { minionToken: emptyKeyToken, correlationId: 'corr_1', attempt: 1 },
+      'github',
+      'get_file_contents',
+      { path: '/repo/readme.md' }
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid minion token');
+    expect(result.error).toContain('no signing secret');
   });
 
   it('rejects an unsigned call (no minion_token) when the dev flag is off (default)', async () => {
