@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { SessionStore, PendingApproval, AuditEntry } from 'framework-core';
-import { verifyMinionToken, canonicalJson } from 'framework-core';
+import { verifyMinionToken, canonicalJson, withSpan } from 'framework-core';
 import {
   type AllowlistConfig,
   type GovernanceConfig,
@@ -15,6 +15,7 @@ import { type RateLimiter, createRateLimiter } from './rate-limiter.js';
 import type { McpServerAdapter } from './adapter.js';
 import { type GovernanceStateStore, createInProcessGovernanceStateStore } from './governance-state.js';
 import { redactValue, redactSecrets } from './redact.js';
+import { recordGovernanceOutcome, recordToolLatency, recordBreakerState } from './telemetry-metrics.js';
 
 export interface ToolContext {
   teamId: string;
@@ -339,7 +340,64 @@ export async function verifyAndExecuteTool(
   );
 }
 
+/**
+ * `ToolResult` -> the milestone's six governance-outcome metric buckets
+ * (Milestone 13, M9/F9). Telemetry-only mapping — never consulted by any
+ * enforcement decision, only by `recordGovernanceOutcome` inside `emit()`
+ * below, which runs identically regardless of whether telemetry is
+ * configured (see `telemetry-metrics.ts`'s no-op guarantee).
+ *
+ * A resumed, previously-approved destructive call returns the SAME
+ * `status: 'success'` a non-destructive allowed call does (there is no
+ * separate `ToolResult` status for "approved and executed" — see
+ * `gateDestructiveCall`'s approved branch) but DOES carry `approvalId`,
+ * which is the only signal available to tell the two apart for the
+ * `approved` metric bucket the milestone asks for, distinct from the
+ * generic `allowed` bucket a plain non-destructive success gets.
+ */
+function governanceOutcomeForResult(result: ToolResult): import('./telemetry-metrics.js').GovernanceOutcome {
+  if (result.status === 'success') {
+    return result.approvalId ? 'approved' : 'allowed';
+  }
+  switch (result.status) {
+    case 'blocked_by_allowlist':
+      return 'blocked';
+    case 'throttled':
+      return 'throttled';
+    case 'approval_pending':
+      return 'approval_requested';
+    case 'approval_denied':
+    case 'approval_timeout':
+      return 'denied';
+    case 'error':
+    case 'approval_required':
+      return 'blocked';
+  }
+}
+
+/**
+ * Governed pipeline entry point, wrapped in an `execute_tool` OTel span
+ * (Milestone 13, M9/F9) that nests under whatever span is active on the
+ * caller's context (a `minion.run` span, when called via the orchestrator
+ * runner's minted-token path) and carries the three required identity
+ * attributes. The span wrapper is ADDITIVE ONLY: `doExecuteToolPipeline`
+ * below is the untouched enforcement pipeline body (same order, same
+ * statuses, same audit calls) — see `toolshed-governance-invariants`.
+ */
 export async function executeTool(
+  ctx: ToolContext,
+  serverAlias: string,
+  toolName: string,
+  params: unknown
+): Promise<ToolResult> {
+  return withSpan(
+    'execute_tool',
+    { correlation_id: ctx.correlationId, minion_type: ctx.minionType, session_id: ctx.sessionId },
+    () => doExecuteToolPipeline(ctx, serverAlias, toolName, params)
+  );
+}
+
+async function doExecuteToolPipeline(
   ctx: ToolContext,
   serverAlias: string,
   toolName: string,
@@ -376,17 +434,25 @@ export async function executeTool(
     // downstream failure message) — redactSecrets' pattern-scan layer runs
     // on it before truncate, same ordering rationale as params above.
     const redactedError = result.error !== undefined ? redactSecrets(result.error) : undefined;
+    const latencyMs = Date.now() - start;
     const entry: AuditEntry = {
       id: `audit_${randomUUID()}`,
       ...auditBase,
       status: result.status,
-      latencyMs: Date.now() - start,
+      latencyMs,
       error: redactedError,
       retryAfterSeconds: result.retryAfterSeconds,
       approvalId: result.approvalId,
     };
     toolshedState.store.createAuditEntry(entry);
     safeInvokeAuditLogger(toolshedState.auditLogger, entry);
+    // Telemetry (Milestone 13, M9/F9): additive only, runs AFTER the audit
+    // write above on every exit path, mirroring emit()'s own "audit on
+    // every exit" invariant but for metrics rather than the durable trail.
+    // Never affects `result` or throws into the caller.
+    const metricAttrs = { serverAlias, toolName, minionType: ctx.minionType };
+    recordGovernanceOutcome(governanceOutcomeForResult(result), metricAttrs);
+    recordToolLatency(latencyMs, metricAttrs);
     return result;
   }
 
@@ -460,6 +526,10 @@ export async function executeTool(
   // statement kept in sync.
   const breakerKey = serverAlias;
   if (!toolshedState.governanceState.canExecuteBreaker(breakerKey)) {
+    // Breaker-state gauge (Milestone 13, M9/F9): observe-only, recorded
+    // alongside the pre-existing open-breaker decision, never influencing
+    // it.
+    recordBreakerState(breakerKey, true);
     return emit({
       status: 'throttled',
       error: 'Circuit breaker is open',
@@ -591,6 +661,7 @@ async function doExecuteTool(
     const cached = state.store.getCachedToolCall(cacheKeyValue);
     if (cached !== undefined) {
       state.governanceState.recordBreakerSuccess(breakerKey);
+      recordBreakerState(breakerKey, false);
       return { status: 'success', data: cached };
     }
   }
@@ -606,8 +677,18 @@ async function doExecuteTool(
   }
 
   try {
-    const data = await adapter.callTool(toolName, params);
+    // adapter.call span (Milestone 13, M9/F9): the innermost span in the
+    // nesting chain (ingress -> orchestrator.run -> minion.run ->
+    // execute_tool -> adapter.call), wrapping ONLY the real downstream
+    // call -- cache hits above never reach here, matching the milestone's
+    // "each adapter call" wording (a cache hit isn't one).
+    const data = await withSpan(
+      'adapter.call',
+      { correlation_id: ctx.correlationId, minion_type: ctx.minionType, session_id: ctx.sessionId, server_alias: serverAlias, tool_name: toolName },
+      () => adapter.callTool(toolName, params)
+    );
     state.governanceState.recordBreakerSuccess(breakerKey);
+    recordBreakerState(breakerKey, false);
     if (cacheKeyValue) {
       const ttlMs = (policy.ttlSeconds ?? 0) * 1000;
       state.store.setCachedToolCall(cacheKeyValue, data, ttlMs);

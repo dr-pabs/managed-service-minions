@@ -1,5 +1,7 @@
 import http from 'node:http';
-import type { SessionStore } from 'framework-core';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildMinionTypeToTierMap, computeSessionCost, loadModelPricing, type SessionStore } from 'framework-core';
 
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
@@ -241,11 +243,60 @@ function notFound(res: http.ServerResponse): void {
   jsonResponse(res, 404, { error: 'Not found' });
 }
 
+function defaultRepoRoot(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // extensions/agent-dashboard/src (or dist) -> repo root is three levels up
+  // (same convention as extensions/orchestrator/src/runner.ts's
+  // defaultRepoRoot and mcp-toolshed's TOOLSHED_REPO_ROOT default).
+  return path.resolve(here, '../../../');
+}
+
+/**
+ * `GET /api/sessions/:id/cost` (Milestone 13, review finding M9/F9): joins
+ * every `MinionRun.tokensUsed` for the session against `rules/models.yaml`
+ * tier prices (via the minion's frontmatter `model_tier`) — see
+ * `framework-core`'s `model-cost.ts` for the actual math, kept there (not
+ * duplicated here) so it has one deterministic-fixture test suite covering
+ * the arithmetic and this endpoint only wires it to HTTP + the store.
+ *
+ * Auth posture: this endpoint intentionally matches every OTHER dashboard
+ * route today — no bearer-token/Entra check, because Milestone 14 (not this
+ * one) adds `DASHBOARD_AUTH_TOKEN` gating across the whole dashboard server.
+ * Adding auth to just this one new route while every existing route stays
+ * open would be inconsistent and not meaningfully more secure; M14's gate
+ * wraps the entire route table in one place, this endpoint included. Scoped
+ * by the SAME optional `?teamId=` param the M9 `/sessions/:id/minion-runs`
+ * endpoint already respects (ADR-022 multi-tenancy), via the identical
+ * `store.listMinionRunsBySession(id, teamId)` call.
+ */
+function buildCostRoute(store: SessionStore, repoRoot: string): Route {
+  let pricing: ReturnType<typeof loadModelPricing> | undefined;
+  let tierMap: Map<string, string> | undefined;
+  function loaded() {
+    if (!pricing || !tierMap) {
+      pricing = loadModelPricing(path.join(repoRoot, 'rules', 'models.yaml'));
+      tierMap = buildMinionTypeToTierMap(repoRoot);
+    }
+    return { pricing, tierMap };
+  }
+
+  return {
+    method: 'GET',
+    pattern: /^\/api\/sessions\/([^/]+)\/cost$/,
+    handler: async (req, res, matches) => {
+      const runs = store.listMinionRunsBySession(matches[1], readTeamIdParam(req));
+      const { pricing: p, tierMap: t } = loaded();
+      jsonResponse(res, 200, computeSessionCost(runs, t, p));
+    },
+  };
+}
+
 export async function startDashboardServer(
   store: SessionStore,
   port: number,
   createServer: typeof http.createServer = http.createServer,
-  agentTypes: string[] = []
+  agentTypes: string[] = [],
+  repoRoot: string = defaultRepoRoot()
 ): Promise<DashboardServer> {
   const configuredAgentTypes = Object.freeze([...agentTypes]);
   const routes: Route[] = [
@@ -302,6 +353,7 @@ export async function startDashboardServer(
         jsonResponse(res, 200, store.listPendingApprovals());
       },
     },
+    buildCostRoute(store, repoRoot),
     {
       // Internal operator endpoint — do not expose the dashboard port to untrusted networks.
       method: 'GET',

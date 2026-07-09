@@ -4,11 +4,17 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import {
   createMinionCorrelationId,
+  createTrackedBudget,
+  enforceTokenBudget,
+  estimateTokensFromChars,
+  extractTokenUsage,
   loadMinionSchemaMap,
   loadSchemas,
   mintMinionToken,
   runWithContract,
+  TokenBudgetExceededError,
   validateMinionOutput,
+  withSpan,
   type IngressRequest,
   type IngressResponse,
   type IngressRunner,
@@ -78,7 +84,12 @@ function loadIntentDag(repoRoot: string): Record<string, string[]> {
   return raw?.intents ?? {};
 }
 
-function loadAgentPrompt(repoRoot: string, minionType: string): string {
+interface AgentPromptAndFrontmatter {
+  contents: string;
+  frontmatter: Record<string, unknown>;
+}
+
+function loadAgentPromptAndFrontmatter(repoRoot: string, minionType: string): AgentPromptAndFrontmatter {
   // Agent filenames use hyphens (code-explorer.md) while minion_type uses
   // underscores (code_explorer) -- minions-repo-conventions documents this
   // convention explicitly ("Minion identity string = agent filename with
@@ -93,10 +104,27 @@ function loadAgentPrompt(repoRoot: string, minionType: string): string {
     if (!match) continue;
     const frontmatter = yaml.load(match[1]) as Record<string, unknown> | undefined;
     if (frontmatter?.minion_type === minionType) {
-      return contents;
+      return { contents, frontmatter };
     }
   }
   throw new Error(`No agents/*.md file found with minion_type "${minionType}"`);
+}
+
+function loadAgentPrompt(repoRoot: string, minionType: string): string {
+  return loadAgentPromptAndFrontmatter(repoRoot, minionType).contents;
+}
+
+/**
+ * Frontmatter `token_budget` (Milestone 13, review finding M9/F9) enforced
+ * per run via the existing `TokenBudgetTracker`. Falls back to
+ * `Number.POSITIVE_INFINITY` (never aborts) when the field is absent or not
+ * a positive number -- a minion whose frontmatter doesn't declare a budget
+ * is not retroactively broken by this milestone.
+ */
+function loadAgentTokenBudget(repoRoot: string, minionType: string): number {
+  const { frontmatter } = loadAgentPromptAndFrontmatter(repoRoot, minionType);
+  const budget = frontmatter.token_budget;
+  return typeof budget === 'number' && Number.isFinite(budget) && budget > 0 ? budget : Number.POSITIVE_INFINITY;
 }
 
 function tryParseJson(raw: string): unknown {
@@ -204,13 +232,25 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
     minionIndex: number,
     request: IngressRequest & { sessionId: string; correlationRoot: string },
     priorOutputs: unknown[]
-  ): Promise<{ run: MinionRun; output: unknown } | { run: MinionRun; waitingApproval: true }> {
+  ): Promise<
+    | { run: MinionRun; output: unknown }
+    | { run: MinionRun; waitingApproval: true }
+    | { run: MinionRun; tokenBudgetExceeded: TokenBudgetExceededError }
+  > {
     const correlationId = createMinionCorrelationId(request.correlationRoot, minionIndex);
     const token = mintMinionToken(
       { minionType, sessionId: request.sessionId, correlationId },
       deps.secret
     );
-    const prompt = loadAgentPrompt(repoRoot, minionType);
+    const { contents: prompt } = loadAgentPromptAndFrontmatter(repoRoot, minionType);
+    const tokenBudget = loadAgentTokenBudget(repoRoot, minionType);
+    // Fresh tracked budget per minion RUN (one DAG step = one run, per this
+    // runner's model): `TokenBudgetTracker` accumulates across the calls
+    // WITHIN this run (e.g. Milestone 10's runWithContract retry-with-
+    // feedback second attempt), which is why it's created once here and
+    // closed over by every call inside the runWithContract callback below,
+    // rather than reset per call.
+    const trackedBudget = createTrackedBudget(tokenBudget);
     const { schemas: compiled, schemaMap: map } = loadedSchemas();
 
     const runId = `run_${request.sessionId}_${minionIndex}_${now()}`;
@@ -225,33 +265,81 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
     deps.store.createMinionRun(run);
 
     let approvalPending: string | undefined;
+    let tokenBudgetExceeded: TokenBudgetExceededError | undefined;
+    let tokensForThisMinion = 0;
 
-    const result = await runWithContract(
-      async (feedback?: string[]) => {
-        const response = await deps.goose.runMinion({
-          minionType,
-          systemPrompt: prompt,
-          userContent: buildMinionUserContent(request, priorOutputs),
-          sessionId: request.sessionId,
-          correlationId,
-          minionToken: token,
-          feedback,
-        });
-        // A scripted/real minion turn may itself invoke execute_tool
-        // through the toolshed via `toolCall` metadata the FakeGooseClient
-        // (or a real Goose+MCP session) triggers as a side effect of
-        // producing its output -- see goose-client.ts and the e2e test for
-        // how this is exercised with a minted token. If that call comes
-        // back approval_pending, the FakeGooseClient encodes that as a
-        // special raw payload the runner recognizes below.
-        if (response.raw === '__APPROVAL_PENDING__') {
-          approvalPending = 'pending';
-          return undefined as unknown;
-        }
-        return tryParseJson(response.raw);
-      },
-      { minionType, schemaMap: map, schemas: compiled }
+    const result = await withSpan(
+      'minion.run',
+      { correlation_id: correlationId, minion_type: minionType, session_id: request.sessionId },
+      () =>
+        runWithContract(
+          async (feedback?: string[]) => {
+            const userContent = buildMinionUserContent(request, priorOutputs);
+            const response = await deps.goose.runMinion({
+              minionType,
+              systemPrompt: prompt,
+              userContent,
+              sessionId: request.sessionId,
+              correlationId,
+              minionToken: token,
+              feedback,
+            });
+
+            // Token accounting (Milestone 13, M9/F9): the Goose /reply
+            // response, as verified against Milestone 11's fixtures
+            // (test/fixtures/goose/*.json), is exactly {role, content} --
+            // no usage field of any kind. extractTokenUsage stays
+            // forward-compatible (reads one if a future response ever adds
+            // it) but on today's real contract always falls through to the
+            // characters/4 estimate over the prompt+content actually sent
+            // and received this turn.
+            const measuredUsage = extractTokenUsage(response);
+            const tokensThisCall =
+              measuredUsage ??
+              estimateTokensFromChars(prompt) + estimateTokensFromChars(userContent) + estimateTokensFromChars(response.raw);
+            tokensForThisMinion += tokensThisCall;
+
+            // enforceTokenBudget's only throw path is TokenBudgetExceededError
+            // (see token-accounting.ts) -- caught here, never left to
+            // propagate as an uncaught rejection, so a minion whose budget
+            // is blown gets a typed abort surfaced to chat (below) instead
+            // of crashing the whole ingress request.
+            try {
+              enforceTokenBudget(trackedBudget, tokensThisCall, {
+                minionType,
+                sessionId: request.sessionId,
+                correlationId,
+                budget: tokenBudget,
+              });
+            } catch (err) {
+              tokenBudgetExceeded = err as TokenBudgetExceededError;
+              return undefined as unknown;
+            }
+
+            // A scripted/real minion turn may itself invoke execute_tool
+            // through the toolshed via `toolCall` metadata the
+            // FakeGooseClient (or a real Goose+MCP session) triggers as a
+            // side effect of producing its output -- see goose-client.ts
+            // and the e2e test for how this is exercised with a minted
+            // token. If that call comes back approval_pending, the
+            // FakeGooseClient encodes that as a special raw payload the
+            // runner recognizes below.
+            if (response.raw === '__APPROVAL_PENDING__') {
+              approvalPending = 'pending';
+              return undefined as unknown;
+            }
+            return tryParseJson(response.raw);
+          },
+          { minionType, schemaMap: map, schemas: compiled }
+        )
     );
+
+    deps.store.updateMinionRun(runId, { tokensUsed: tokensForThisMinion });
+
+    if (tokenBudgetExceeded) {
+      deps.store.updateMinionRun(runId, { status: 'token_budget_exceeded', completedAt: now() });
+      return { run: { ...run, status: 'token_budget_exceeded' }, tokenBudgetExceeded };
+    }
 
     if (approvalPending) {
       deps.store.updateMinionRun(runId, { status: 'waiting_approval' });
@@ -291,41 +379,53 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
   return {
     run: async (
       request: IngressRequest & { sessionId: string; correlationRoot: string }
-    ): Promise<IngressResponse> => {
-      const classification = await classifyIntent(request);
-      if (!classification) {
-        return { text: "I couldn't classify your request into a supported intent. Could you rephrase it?" };
-      }
+    ): Promise<IngressResponse> =>
+      withSpan(
+        'orchestrator.run',
+        { correlation_id: request.correlationRoot, minion_type: 'orchestrator', session_id: request.sessionId },
+        async () => {
+          const classification = await classifyIntent(request);
+          if (!classification) {
+            return { text: "I couldn't classify your request into a supported intent. Could you rephrase it?" };
+          }
 
-      const dag = loadIntentDag(repoRoot);
-      const minionTypes = dag[classification.intent];
-      if (!minionTypes || minionTypes.length === 0) {
-        return { text: `I understood this as "${classification.intent}" but no minion DAG is configured for it.` };
-      }
+          const dag = loadIntentDag(repoRoot);
+          const minionTypes = dag[classification.intent];
+          if (!minionTypes || minionTypes.length === 0) {
+            return { text: `I understood this as "${classification.intent}" but no minion DAG is configured for it.` };
+          }
 
-      const outputs: Array<{ minionType: string; output: unknown }> = [];
-      for (let i = 0; i < minionTypes.length; i++) {
-        const minionType = minionTypes[i];
-        const outcome = await runOneMinion(
-          minionType,
-          i,
-          request,
-          outputs.map((o) => o.output)
-        );
-        if ('waitingApproval' in outcome) {
-          return {
-            text: `This action (${minionType}) requires operator approval before it can proceed. I'll pick back up once it's approved -- just send another message here to check.`,
-          };
+          const outputs: Array<{ minionType: string; output: unknown }> = [];
+          for (let i = 0; i < minionTypes.length; i++) {
+            const minionType = minionTypes[i];
+            const outcome = await runOneMinion(
+              minionType,
+              i,
+              request,
+              outputs.map((o) => o.output)
+            );
+            if ('tokenBudgetExceeded' in outcome) {
+              // Typed error surfaced as a clean chat message (Milestone 13,
+              // M9/F9) -- never a crash/thrown exception reaching the bot
+              // process. The MinionRun row is already persisted with
+              // status 'token_budget_exceeded' by runOneMinion above.
+              return { text: outcome.tokenBudgetExceeded.message };
+            }
+            if ('waitingApproval' in outcome) {
+              return {
+                text: `This action (${minionType}) requires operator approval before it can proceed. I'll pick back up once it's approved -- just send another message here to check.`,
+              };
+            }
+            if (outcome.run.status === 'contract_violation') {
+              return {
+                text: `The ${minionType} minion's output didn't match its expected schema after a retry. This has been logged; an operator can inspect the run (${outcome.run.correlationId}).`,
+              };
+            }
+            outputs.push({ minionType, output: outcome.output });
+          }
+
+          return { text: synthesizeReply(outputs) };
         }
-        if (outcome.run.status === 'contract_violation') {
-          return {
-            text: `The ${minionType} minion's output didn't match its expected schema after a retry. This has been logged; an operator can inspect the run (${outcome.run.correlationId}).`,
-          };
-        }
-        outputs.push({ minionType, output: outcome.output });
-      }
-
-      return { text: synthesizeReply(outputs) };
-    },
+      ),
   };
 }

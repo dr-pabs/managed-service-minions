@@ -113,6 +113,83 @@ select the runner via `RUNNER=orchestrator|echo`:
   mode via `RUNNER=echo`): `createEchoRunner()`, unchanged from before this
   milestone — useful for local smoke tests with no Goose/toolshed running.
 
+## Observability (Milestone 13, review finding M9 / feature F9)
+
+`packages/framework-core/src/telemetry.ts`'s `initTelemetry()` wires OpenTelemetry
+traces via the standard `OTEL_EXPORTER_OTLP_ENDPOINT` env var. **It is a
+complete no-op when that variable is unset** — no `NodeSDK`, no exporter, no
+network call — so `pnpm test`/local dev need zero collectors; every test in
+the repo that asserts on spans uses the OTel SDK's own `InMemorySpanExporter`
+instead of a real collector.
+
+Spans nest: `ingress.message` (root, from `framework-core`'s
+`handleIngressMessage`) → `orchestrator.run` → `minion.run` (one per DAG
+step) → `execute_tool` (one per governed tool call, in `mcp-toolshed`'s
+`executeTool`) → `adapter.call` (the actual downstream MCP call, cache hits
+excluded). Every span carries `correlation_id`, `minion_type`, and
+`session_id` attributes. Nesting is real OTel context propagation (not a flat
+span list spliced together by name), verified in
+`packages/framework-core/src/__tests__/telemetry.test.ts` and
+`extensions/orchestrator/__tests__/runner-telemetry.test.ts` (the latter uses
+the REAL `mcp-toolshed` pipeline, not a fake, so the `execute_tool`/
+`adapter.call` spans it asserts on are the actual toolshed's).
+
+Governance metrics (OTel counters/histogram/gauge, `extensions/mcp-toolshed/src/telemetry-metrics.ts`):
+a `toolshed_governance_outcomes_total` counter tagged by outcome
+(`allowed`/`blocked`/`throttled`/`approval_requested`/`approved`/`denied`),
+a `toolshed_tool_latency_ms` histogram, and a `toolshed_breaker_open`
+gauge per server alias — all emitted from inside `executeTool`'s existing
+`emit()`/breaker-check call sites, strictly additive: no enforcement
+decision, status, or audit entry changes because of this instrumentation
+(see `toolshed-governance-invariants`).
+
+### Running a local OTLP collector to watch spans nest
+
+Optional — nothing in `pnpm test` or normal dev requires this. To see real
+spans exported and nesting visibly in a UI:
+
+```sh
+# Starts the OpenTelemetry Collector with its default OTLP receiver
+# (gRPC :4317, HTTP :4318) and logs every received span to stdout.
+docker run --rm -p 4318:4318 -p 4317:4317 \
+  otel/opentelemetry-collector:latest
+
+# In another shell, point the orchestrator/bots/toolshed/dashboard processes
+# at it (all read the same standard env var via framework-core's
+# initTelemetry()):
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+For a nicer UI than stdout logs, swap in Jaeger's all-in-one image instead
+(exposes the same OTLP/HTTP port plus a trace viewer on :16686):
+
+```sh
+docker run --rm -p 4318:4318 -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+# then open http://localhost:16686
+```
+
+### Token accounting and cost
+
+The Goose `/reply` response contract, as verified against Milestone 11's
+recorded fixtures (`test/fixtures/goose/*.json`), is exactly `{role,
+content}` — it carries **no token usage field**. `runner.ts` therefore
+estimates tokens per minion turn as `characters / 4` over the system prompt +
+user content + response content (`framework-core`'s
+`estimateTokensFromChars`); if a future Goose response ever adds a
+`usage.total_tokens` field, `extractTokenUsage` reads it instead without any
+caller change. Each `MinionRun.tokensUsed` is populated from this estimate.
+Frontmatter `token_budget` (`agents/*.md`) is enforced per run via the
+pre-existing `TokenBudgetTracker` (`packages/framework-core/src/token-budget.ts`,
+previously dead code) — exceeding it aborts the minion with a typed
+`TokenBudgetExceededError`, surfaced as a plain chat reply (never a crash or
+stack trace), and the `MinionRun` row is recorded with status
+`token_budget_exceeded`. `extensions/agent-dashboard`'s
+`GET /api/sessions/:id/cost` joins a session's `MinionRun.tokensUsed` against
+`rules/models.yaml`'s per-tier `price_per_1k_tokens_usd` (via each minion's
+frontmatter `model_tier`) for an estimated USD figure — see
+`packages/framework-core/src/model-cost.ts`.
+
 ## Untrusted-content interpolation points (Milestone 16 will quarantine these)
 
 `src/runner.ts`'s `buildMinionUserContent` and `classifyIntent` interpolate

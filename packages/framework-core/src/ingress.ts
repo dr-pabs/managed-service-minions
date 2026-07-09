@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createRootCorrelationId } from './correlation.js';
+import { withSpan } from './telemetry.js';
 import type { Session, SessionStore } from './store.js';
 
 /**
@@ -126,9 +127,21 @@ export async function handleIngressMessage(
     store.updateSession(sessionId, { updatedAt: currentTime });
   }
 
-  return runner.run({
-    ...request,
-    sessionId,
-    correlationRoot: session.correlationRoot,
-  });
+  // ingress.message span (Milestone 13, M9/F9) — the root of the nesting
+  // chain (ingress -> orchestrator.run -> minion.run -> execute_tool ->
+  // adapter.call). Wraps the runner call specifically (not session
+  // lookup/creation above, which is fast bookkeeping, not a call worth its
+  // own span) so any span the runner itself creates (the orchestrator
+  // runner's `orchestrator.run`) nests under this one via real OTel context
+  // propagation, not just chronological ordering.
+  return withSpan(
+    'ingress.message',
+    { correlation_id: session.correlationRoot, session_id: sessionId, minion_type: 'ingress' },
+    () =>
+      runner.run({
+        ...request,
+        sessionId,
+        correlationRoot: session!.correlationRoot,
+      })
+  );
 }

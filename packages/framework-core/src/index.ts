@@ -10,3 +10,6 @@ export * from './canonical-json.js';
 export * from './agent-frontmatter.js';
 export * from './output-contract.js';
 export * from './http-retry.js';
+export * from './telemetry.js';
+export * from './token-accounting.js';
+export * from './model-cost.js';

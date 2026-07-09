@@ -1,4 +1,8 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { trace, context } from '@opentelemetry/api';
+import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { handleIngressMessage, resolveSessionTtlHours, DEFAULT_SESSION_TTL_HOURS } from '../ingress.js';
 import type { Session, SessionStore } from '../store.js';
 
@@ -282,5 +286,48 @@ describe('handleIngressMessage', () => {
     );
 
     expect(result).toEqual({ text: 'done', blocks: [] });
+  });
+
+  describe('ingress.message span (Milestone 13, M9/F9)', () => {
+    let exporter: InMemorySpanExporter;
+    let provider: NodeTracerProvider;
+
+    beforeEach(() => {
+      exporter = new InMemorySpanExporter();
+      provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+      provider.register({ contextManager: new AsyncLocalStorageContextManager() });
+    });
+
+    afterEach(async () => {
+      exporter.reset();
+      await provider.shutdown();
+      trace.disable();
+      context.disable();
+    });
+
+    it('wraps the whole call in an ingress.message span carrying correlation_id/session_id, with the runner call nested inside it', async () => {
+      const store = makeStore();
+      let sawActiveSpanDuringRunnerCall = false;
+      const runner = {
+        run: jest.fn(async () => {
+          // The runner itself runs WHILE the ingress.message span is
+          // active on the OTel context -- proving real nesting (a future
+          // orchestrator.run span created inside runner.run would nest
+          // under this one via context propagation), not just a span that
+          // starts and ends around an opaque call.
+          sawActiveSpanDuringRunnerCall = trace.getActiveSpan() !== undefined;
+          return { text: 'done' };
+        }),
+      };
+
+      await handleIngressMessage({ platform: 'slack', teamId: 'T1', userId: 'U1', text: 'hi', threadId: 'ts1' }, store, runner);
+
+      expect(sawActiveSpanDuringRunnerCall).toBe(true);
+      const spans = exporter.getFinishedSpans();
+      const ingressSpan = spans.find((s) => s.name === 'ingress.message');
+      expect(ingressSpan).toBeDefined();
+      expect(ingressSpan!.attributes.correlation_id).toBeDefined();
+      expect(ingressSpan!.attributes.session_id).toBe('sess_T1:slack:ts1');
+    });
   });
 });
