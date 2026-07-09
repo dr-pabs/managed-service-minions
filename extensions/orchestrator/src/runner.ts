@@ -11,6 +11,7 @@ import {
   loadMinionSchemaMap,
   loadSchemas,
   mintMinionToken,
+  quarantineUntrusted,
   runWithContract,
   TokenBudgetExceededError,
   validateMinionOutput,
@@ -166,19 +167,20 @@ function tryParseJson(raw: string): unknown {
  * 6. **Synthesize** a reply from the last minion's output (or every
  *    minion's output, joined, for a multi-step DAG).
  *
- * Untrusted-content interpolation points (Milestone 16 will wrap these in
- * `quarantineUntrusted`; not built here — see the ExecPlan's Milestone 11
- * scope note and this function's own inline markers below): a ticket body,
- * PR title/description, or diff returned by a minion's own tool call is
- * NEVER placed back into a downstream minion's prompt by this runner today
- * (each minion fetches its own context directly via `execute_tool`), but
+ * Untrusted-content interpolation points (Milestone 16, review finding F15
+ * — quarantined via `quarantineUntrusted` below; marked with
+ * `UNTRUSTED-INTERPOLATION-POINT` comments at each site): a ticket body, PR
+ * title/description, or diff returned by a minion's own tool call is NEVER
+ * placed back into a downstream minion's prompt by this runner today (each
+ * minion fetches its own context directly via `execute_tool`), but
  * `userContent` built in `buildMinionUserContent` below interpolates the
  * ORIGINAL USER MESSAGE (`request.text`) into every minion's first turn,
- * and a future DAG step that forwards one minion's raw `resultJson` into
- * the next minion's prompt (e.g. ticket_fix_pr's ticket_analyst ->
- * code_explorer handoff) is exactly the kind of untrusted-content
- * interpolation point Milestone 16 must quarantine. Marked with
- * `UNTRUSTED-INTERPOLATION-POINT` comments below.
+ * and a DAG step that forwards one minion's raw `resultJson` into the next
+ * minion's prompt (e.g. ticket_fix_pr's ticket_analyst -> code_explorer
+ * handoff, or any future step) is exactly the kind of untrusted-content
+ * interpolation point Milestone 16 quarantines — both are wrapped in
+ * `quarantineUntrusted` before ever reaching a model, so raw untrusted text
+ * is never interpolated into a prompt.
  */
 export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressRunner {
   const repoRoot = deps.repoRoot ?? defaultRepoRoot();
@@ -196,13 +198,25 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
 
   function buildMinionUserContent(request: IngressRequest, priorOutputs: unknown[]): string {
     // UNTRUSTED-INTERPOLATION-POINT: request.text is user-supplied chat
-    // text (a Slack/Teams message). It is placed directly into the minion's
-    // prompt here with no quarantine boundary -- Milestone 16 owns wrapping
-    // this (and any prior minion's resultJson forwarded in priorOutputs)
-    // in `quarantineUntrusted` before it reaches a model.
-    const parts = [`User request: ${request.text}`];
+    // text (a Slack/Teams message, or -- via webhook-ingress, Milestone 15
+    // -- text derived from a ticket body / PR title+description / diff /
+    // issue comment / webhook payload). Milestone 16 (F15) quarantines it
+    // here before it ever reaches a model: nothing downstream of this
+    // function sees raw untrusted text again.
+    const parts = [`User request: ${quarantineUntrusted('user request', request.text)}`];
     if (priorOutputs.length > 0) {
-      parts.push(`Prior minion outputs (JSON): ${JSON.stringify(priorOutputs)}`);
+      // UNTRUSTED-INTERPOLATION-POINT: a prior minion's own output can
+      // itself contain attacker-controlled substrings it read verbatim off
+      // an external system (a ticket body, PR description, or diff quoted
+      // back inside a `summary`/`findings[].message` field, for example),
+      // so forwarding it into the NEXT minion's prompt is exactly the
+      // handoff-style interpolation point the milestone calls out (e.g.
+      // ticket_analyst -> code_explorer). Quarantined as one JSON blob
+      // rather than per-field, since the DAG-generic code here has no
+      // schema-specific knowledge of which fields are "the untrusted part".
+      parts.push(
+        `Prior minion outputs (JSON): ${quarantineUntrusted('prior minion outputs', JSON.stringify(priorOutputs))}`
+      );
     }
     return parts.join('\n\n');
   }
@@ -214,8 +228,11 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
     const { schemas: compiled, schemaMap: map } = loadedSchemas();
     const response = await deps.goose.classifyIntent({
       systemPrompt: orchestratorPrompt,
-      // UNTRUSTED-INTERPOLATION-POINT: same as buildMinionUserContent above.
-      userContent: `User request: ${request.text}\nRespond with JSON matching schemas/intent.json only.`,
+      // UNTRUSTED-INTERPOLATION-POINT: same as buildMinionUserContent above
+      // -- quarantined for the same reason (request.text is user/webhook-
+      // supplied and reaches the orchestrator's own classification prompt
+      // before any minion DAG even runs).
+      userContent: `User request: ${quarantineUntrusted('user request', request.text)}\nRespond with JSON matching schemas/intent.json only.`,
       sessionId: request.sessionId,
       correlationId: request.correlationRoot,
     });
