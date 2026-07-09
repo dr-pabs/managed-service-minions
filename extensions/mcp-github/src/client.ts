@@ -1,7 +1,9 @@
 import { fetchWithRetry, paginateGitHub, type RetryPolicy } from 'framework-core';
 import { GitHubApiError } from './errors.js';
 import type {
+  CreateIssueCommentInput,
   CreatePullRequestInput,
+  IssueComment,
   ListPullRequestsInput,
   MergePullRequestInput,
   MergeResult,
@@ -21,6 +23,7 @@ export interface GitHubClient {
   getPullRequestDiff(input: PullNumberInput): Promise<string>;
   createPullRequest(input: CreatePullRequestInput): Promise<PullRequest>;
   mergePullRequest(input: MergePullRequestInput): Promise<MergeResult>;
+  createIssueComment(input: CreateIssueCommentInput): Promise<IssueComment>;
 }
 
 export interface GitHubClientOptions {
@@ -164,6 +167,14 @@ export function createGitHubClient(
         }
       );
       return (await response.json()) as MergeResult;
+    },
+
+    async createIssueComment(input): Promise<IssueComment> {
+      const response = await request(`/repos/${input.owner}/${input.repo}/issues/${input.issue_number}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ body: input.body }),
+      });
+      return (await response.json()) as IssueComment;
     },
   };
 }

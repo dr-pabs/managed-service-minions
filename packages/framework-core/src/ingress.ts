@@ -28,7 +28,7 @@ export function resolveSessionTtlHours(): number {
  * A chat-platform message that has been normalized to a common shape.
  */
 export interface IngressRequest {
-  platform: 'slack' | 'teams';
+  platform: 'slack' | 'teams' | 'webhook';
   teamId: string;
   channelId?: string;
   userId: string;

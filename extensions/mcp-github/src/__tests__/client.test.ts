@@ -361,6 +361,37 @@ describe('createGitHubClient', () => {
     });
   });
 
+  describe('createIssueComment (Milestone 15, F11)', () => {
+    it('posts a comment to a PR/issue and returns the created comment', async () => {
+      const comment = { id: 99, body: 'Looks good to me.', html_url: 'https://github.com/org/repo/issues/1#issuecomment-99' };
+      fetchMock.mockResolvedValue(mockResponse({ ok: true, status: 201, json: comment }));
+      const client = createGitHubClient('token', { fetchFn: fetchMock as any });
+      const result = await client.createIssueComment({
+        owner: 'org',
+        repo: 'repo',
+        issue_number: 1,
+        body: 'Looks good to me.',
+      });
+      expect(result).toEqual(comment);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.github.com/repos/org/repo/issues/1/comments',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ body: 'Looks good to me.' }),
+        })
+      );
+    });
+
+    it('is not retried automatically on a 500 beyond the shared non-idempotent policy (POST)', async () => {
+      fetchMock.mockResolvedValue(mockResponse({ ok: false, status: 500, text: 'boom' }));
+      const client = createGitHubClient('token', { fetchFn: fetchMock as any });
+      await expect(
+        client.createIssueComment({ owner: 'org', repo: 'repo', issue_number: 1, body: 'x' })
+      ).rejects.toBeInstanceOf(GitHubApiError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('error handling', () => {
     it('throws GitHubApiError for non-OK responses', async () => {
       fetchMock.mockResolvedValue(

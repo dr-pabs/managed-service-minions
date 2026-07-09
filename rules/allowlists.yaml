@@ -27,6 +27,15 @@ allowlists:
     github:
       - github_get_pull_request
       - github_get_pull_request_diff
+      # Milestone 15 (F11): the webhook-ingress reply path posts the review
+      # summary as a PR comment through the governed toolshed, minting a
+      # code_reviewer token exactly like any other code_reviewer tool call --
+      # code_reviewer is the terminal minion of the code_review DAG that
+      # pull_request.opened/check_suite.completed(failure) webhooks drive, so
+      # granting it here (not to the orchestrator, which never calls tools
+      # directly -- see ORCHESTRATOR_EXEMPTION) keeps the reply inside the
+      # same identity/audit trail as the rest of that minion's work.
+      - github_create_issue_comment
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff

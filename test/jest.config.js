@@ -17,7 +17,8 @@ export default {
     '^framework-core$': '<rootDir>/../packages/framework-core/src/index.ts',
     '^mcp-toolshed$': '<rootDir>/../extensions/mcp-toolshed/src/index.ts',
     '^orchestrator$': '<rootDir>/../extensions/orchestrator/src/index.ts',
-    '^slack-bot/slack-bot\\.js$': '<rootDir>/../extensions/slack-bot/src/slack-bot.ts'
+    '^slack-bot/slack-bot\\.js$': '<rootDir>/../extensions/slack-bot/src/slack-bot.ts',
+    '^webhook-ingress/webhook-ingress\\.js$': '<rootDir>/../extensions/webhook-ingress/src/webhook-ingress.ts'
   },
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   collectCoverageFrom: ['src/prompt-quality/**/*.ts'],

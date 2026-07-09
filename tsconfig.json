@@ -18,7 +18,8 @@
     "paths": {
       "framework-core": ["./packages/framework-core/src/index.ts"],
       "mcp-toolshed": ["./extensions/mcp-toolshed/src/index.ts"],
-      "orchestrator": ["./extensions/orchestrator/src/index.ts"]
+      "orchestrator": ["./extensions/orchestrator/src/index.ts"],
+      "webhook-ingress": ["./extensions/webhook-ingress/src/index.ts"]
     }
   },
   "include": ["packages/**/*.ts", "extensions/**/*.ts", "infra/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],

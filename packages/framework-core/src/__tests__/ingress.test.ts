@@ -149,6 +149,28 @@ describe('handleIngressMessage', () => {
     expect(firstCall[0].id).not.toBe(secondCall[0].id);
   });
 
+  it('Milestone 15 (F11): a webhook-platform request keys its session as sess_<teamId>:webhook:<threadId>, distinct from a slack session on the same threadId', async () => {
+    const store = makeStore();
+    const runner = { run: jest.fn().mockResolvedValue({ text: 'ok' }) };
+
+    await handleIngressMessage(
+      { platform: 'webhook', teamId: 'acme/repo', userId: 'github', text: 'PR opened', threadId: 'acme/repo#1' },
+      store,
+      runner
+    );
+    await handleIngressMessage(
+      { platform: 'slack', teamId: 'acme/repo', userId: 'u1', text: 'hi', threadId: 'acme/repo#1' },
+      store,
+      runner
+    );
+
+    expect(store.createSession).toHaveBeenCalledTimes(2);
+    const [webhookCall, slackCall] = (store.createSession as jest.Mock).mock.calls;
+    expect(webhookCall[0].id).toBe('sess_acme/repo:webhook:acme/repo#1');
+    expect(slackCall[0].id).toBe('sess_acme/repo:slack:acme/repo#1');
+    expect(webhookCall[0].id).not.toBe(slackCall[0].id);
+  });
+
   it('M3 regression: two non-threaded channel messages produce two DISTINCT sessions', async () => {
     const store = makeStore();
     const runner = { run: jest.fn().mockResolvedValue({ text: 'ok' }) };

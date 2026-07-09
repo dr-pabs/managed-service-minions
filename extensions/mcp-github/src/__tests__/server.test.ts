@@ -27,6 +27,7 @@ describe('createGitHubServer', () => {
       getPullRequestDiff: jest.fn(),
       createPullRequest: jest.fn(),
       mergePullRequest: jest.fn(),
+      createIssueComment: jest.fn(),
     } as unknown as GitHubClient;
 
     mockSetRequestHandler.mockClear();
@@ -48,13 +49,14 @@ describe('createGitHubServer', () => {
       tools: Array<{ name: string }>;
     }>;
     const response = await listToolsHandler();
-    expect(response.tools).toHaveLength(5);
+    expect(response.tools).toHaveLength(6);
     expect(response.tools.map((t) => t.name)).toEqual([
       'github_list_pull_requests',
       'github_get_pull_request',
       'github_get_pull_request_diff',
       'github_create_pull_request',
       'github_merge_pull_request',
+      'github_create_issue_comment',
     ]);
   });
 
@@ -133,6 +135,23 @@ describe('createGitHubServer', () => {
       const payload = JSON.parse(response.content[0].text);
       expect(payload.success).toBe(true);
       expect(payload.data).toEqual(merged);
+    });
+
+    it('creates an issue comment (Milestone 15, F11)', async () => {
+      const comment = { id: 7, body: 'Nice work.', html_url: 'https://github.com/org/repo/issues/1#issuecomment-7' };
+      (mockClient.createIssueComment as jest.Mock<any>).mockResolvedValue(comment);
+      const response = await callTool('github_create_issue_comment', {
+        owner: 'org',
+        repo: 'repo',
+        issue_number: 1,
+        body: 'Nice work.',
+      });
+      const payload = JSON.parse(response.content[0].text);
+      expect(payload.success).toBe(true);
+      expect(payload.data).toEqual(comment);
+      expect(mockClient.createIssueComment).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: 'org', repo: 'repo', issue_number: 1, body: 'Nice work.' })
+      );
     });
 
     it('returns an error for unknown tools', async () => {

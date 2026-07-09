@@ -35,6 +35,7 @@ registry:
     - github_get_pull_request_diff
     - github_create_pull_request
     - github_merge_pull_request
+    - github_create_issue_comment
   azure_devops:
     - ado_list_pull_requests
     - ado_get_pull_request
