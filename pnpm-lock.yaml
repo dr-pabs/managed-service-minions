@@ -296,7 +296,17 @@ importers:
   infra: {}
 
   packages/framework-core:
+    dependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      js-yaml:
+        specifier: ^4.2.0
+        version: 4.2.0
     devDependencies:
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -934,6 +944,7 @@ packages:
   '@microsoft/teams-ai@1.7.4':
     resolution: {integrity: sha512-iC9B9c7bZkZVqvMZjigTa5/UfS8SMLaY7InlEJONka+OhsStTcQcWizSL1KE4t2EH1JerI9T4uGDPj5Y2TiMfA==}
     engines: {node: '>=18.x'}
+    deprecated: 'This package is deprecated. Use @microsoft/teams.ai (Teams SDK v2)  instead. Migration guide: https://microsoft.github.io/teams-sdk/typescript/migrations/v1 | Repo:  https://github.com/microsoft/teams.ts'
     peerDependencies:
       botbuilder: ^4.23.1
       openai: 4.77.4

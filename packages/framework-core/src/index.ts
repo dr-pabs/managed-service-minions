@@ -7,3 +7,5 @@ export * from './ingress.js';
 export * from './goose-runner.js';
 export * from './minion-token.js';
 export * from './canonical-json.js';
+export * from './agent-frontmatter.js';
+export * from './output-contract.js';

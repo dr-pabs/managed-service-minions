@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { readAgentFrontmatter } from 'framework-core';
 
 /**
  * Cross-checks the governance config artifacts (agents/*.md frontmatter,
@@ -26,41 +27,13 @@ export interface ValidationResult {
  */
 export const ORCHESTRATOR_EXEMPTION: readonly string[] = ['orchestrator'];
 
-interface AgentFrontmatter {
-  file: string;
-  minionType?: string;
-  outputSchema?: string;
-}
-
-function parseFrontmatter(contents: string): Record<string, unknown> {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(contents);
-  if (!match) {
-    return {};
-  }
-  const parsed = yaml.load(match[1]);
-  return (parsed as Record<string, unknown>) ?? {};
-}
-
-function readAgents(root: string): AgentFrontmatter[] {
-  const agentsDir = path.join(root, 'agents');
-  if (!fs.existsSync(agentsDir)) {
-    return [];
-  }
-  const files = fs
-    .readdirSync(agentsDir)
-    .filter((f) => f.endsWith('.md'))
-    .sort();
-  return files.map((file) => {
-    const fullPath = path.join(agentsDir, file);
-    const contents = fs.readFileSync(fullPath, 'utf8');
-    const frontmatter = parseFrontmatter(contents);
-    return {
-      file: path.join('agents', file),
-      minionType: typeof frontmatter.minion_type === 'string' ? frontmatter.minion_type : undefined,
-      outputSchema: typeof frontmatter.output_schema === 'string' ? frontmatter.output_schema : undefined,
-    };
-  });
-}
+// Frontmatter reading (agents/*.md -> minion_type/output_schema) used to be
+// a private copy here. Milestone 10 (output-contract enforcement) needed
+// the identical convention in `framework-core` — which `mcp-toolshed`
+// already depends on, never the reverse — so the parsing logic now lives
+// in `framework-core`'s `agent-frontmatter.ts` and both packages import it
+// from there. See the ExecPlan Decision Log, Milestone 10.
+const readAgents = readAgentFrontmatter;
 
 function loadYamlFile(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) {

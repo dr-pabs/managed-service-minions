@@ -10,7 +10,11 @@
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "typescript": "^5.8.3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "js-yaml": "^4.2.0"
+  }
 }
