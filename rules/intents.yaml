@@ -1,0 +1,45 @@
+# Intent -> minion DAG (Milestone 11, review finding M5 / F8).
+#
+# Every enum value in schemas/intent.json `intent` MUST have an entry here
+# (scripts/validate-config.ts check (f) enforces this as an ERROR now that
+# this file exists — before Milestone 11 it was warn-only). Every minion_type
+# named in a DAG below must be a real minion: a key in rules/allowlists.yaml
+# `allowlists`, or the exempted `orchestrator` itself (which never appears in
+# a DAG it dispatches to). scripts/validate-config.ts's check (f) verifies
+# this too.
+#
+# The DAG is an ORDERED list: extensions/orchestrator/src/runner.ts runs each
+# minion in list order, feeding downstream minions the accumulated context
+# from upstream ones (see runner.ts's docstring for exactly what "context"
+# means per minion).
+#
+# minion_type naming note: the PR-authoring minion's agents/pr-crafter.md
+# frontmatter declares `minion_type: pr_create` (matching the
+# rules/allowlists.yaml key `pr_create`), NOT `pr_crafter` — the file name
+# and the minion_type/allowlist key deliberately differ (see
+# minions-repo-conventions: "Minion identity string = agent filename with
+# underscores" is the general rule, but pr-crafter.md is the one exception
+# already baked into the shipped config; verified by reading the frontmatter
+# directly rather than assumed).
+intents:
+  ticket_lookup:
+    - ticket_analyst
+  ticket_summary:
+    - ticket_analyst
+  code_explore:
+    - code_explorer
+  code_review:
+    - code_explorer
+    - code_reviewer
+  pr_create:
+    - code_explorer
+    - pr_create
+  security_audit:
+    - code_explorer
+    - security_auditor
+  ticket_fix_pr:
+    - ticket_analyst
+    - code_explorer
+    - code_writer
+    - test_writer
+    - pr_create

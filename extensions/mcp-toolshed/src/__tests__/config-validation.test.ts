@@ -20,11 +20,9 @@ describe('validateConfigAtRoot against the real repository', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('warns (does not error) that rules/intents.yaml does not exist yet, per check (f)', () => {
+  it('reports zero intents.yaml warnings against the checked-in config (Milestone 11: rules/intents.yaml now exists and covers every intent)', () => {
     const result = validateConfigAtRoot(REPO_ROOT);
-    expect(
-      result.warnings.some((w) => w.includes('intents.yaml') && w.includes('does not exist yet'))
-    ).toBe(true);
+    expect(result.warnings.some((w) => w.includes('intents.yaml'))).toBe(false);
   });
 
   it('proves the C4 fix: isToolAllowed(allowlists, "ticket_analyst", "jira", "jira_get_issue") is true using the real loaded YAML', () => {
@@ -296,6 +294,54 @@ describe('validateConfigAtRoot against fixture trees', () => {
     const result = validateConfigAtRoot(tmpDir);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
+  });
+
+  it('(f) rejects a DAG entry naming a minion_type absent from allowlists', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'intents.yaml'),
+      ['intents:', '  ticket_lookup:', '    - not_a_real_minion'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(
+      result.errors.some((e) => e.includes('not_a_real_minion') && e.includes('no rules/allowlists.yaml entry'))
+    ).toBe(true);
+  });
+
+  it('(f) rejects a DAG that is not an array', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'intents.yaml'),
+      ['intents:', '  ticket_lookup: ticket_analyst'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(result.errors.some((e) => e.includes('must be an array'))).toBe(true);
+  });
+
+  it('(f) rejects a DAG entry that is not a string', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'intents.yaml'),
+      ['intents:', '  ticket_lookup:', '    - 42'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(result.errors.some((e) => e.includes('non-string entry'))).toBe(true);
+  });
+
+  it('(f) accepts the exempted orchestrator minion_type inside a DAG', () => {
+    seedMinimalValidTree(tmpDir);
+    writeFile(
+      path.join(tmpDir, 'rules', 'intents.yaml'),
+      ['intents:', '  ticket_lookup:', '    - orchestrator', '    - ticket_analyst'].join('\n')
+    );
+    const result = validateConfigAtRoot(tmpDir);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('(f) passes against the real, shipped rules/intents.yaml (every intent covered, every DAG entry a real minion_type)', () => {
+    const result = validateConfigAtRoot(REPO_ROOT);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some((w) => w.includes('intents.yaml'))).toBe(false);
   });
 
   it('rejects a cache_policy entry that marks a destructive tool cacheable', () => {

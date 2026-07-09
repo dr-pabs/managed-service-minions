@@ -1,0 +1,15 @@
+{
+  "_comment": "Recorded/example POST {baseUrl}/reply request+response pair for an orchestrator intent-classification turn. NOT captured against a live goose serve process (none was available in this environment) -- this fixture encodes the wire shape extensions/orchestrator/src/goose-client.ts sends and the shape packages/framework-core/src/goose-runner.ts already guessed, so it exercises the SAME contract test path a live-recorded fixture would once someone runs `goose serve` and re-records it. See extensions/orchestrator/README.md for how to do that.",
+  "request": {
+    "messages": [
+      { "role": "system", "content": "# Orchestrator\n\n## Goal\nTurn every user request into the right sequence of minion runs..." },
+      { "role": "user", "content": "User request: review PR #1\nRespond with JSON matching schemas/intent.json only." }
+    ],
+    "session_id": "sess_T1:slack:ts1",
+    "correlation_id": "corr_root1"
+  },
+  "response": {
+    "role": "assistant",
+    "content": "{\"intent\":\"code_review\",\"complexity\":\"simple\",\"platform\":\"slack\"}"
+  }
+}

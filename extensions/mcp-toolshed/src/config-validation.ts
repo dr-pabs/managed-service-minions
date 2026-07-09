@@ -216,5 +216,36 @@ export function validateConfigAtRoot(repoRoot: string): ValidationResult {
     }
   }
 
+  // (f, continued) Milestone 11: every DAG entry must be an ORDERED array of
+  // real minion_types -- keys in rules/allowlists.yaml `allowlists`, or the
+  // exempted `orchestrator` (which never legitimately appears in a DAG it
+  // dispatches to, but is not itself an error to reference). This closes the
+  // other half of check (f): the intent enum is covered (above), AND every
+  // name the DAG points at actually resolves to a governed minion, not a
+  // typo that would silently no-op at runtime.
+  if (intentsFileExists) {
+    for (const [intentName, dag] of Object.entries(intentDag)) {
+      if (!Array.isArray(dag)) {
+        errors.push(
+          `ERROR rules/intents.yaml: intent "${intentName}"'s DAG must be an array of minion_type strings`
+        );
+        continue;
+      }
+      for (const step of dag) {
+        if (typeof step !== 'string') {
+          errors.push(
+            `ERROR rules/intents.yaml: intent "${intentName}"'s DAG contains a non-string entry`
+          );
+          continue;
+        }
+        if (!allowlistKeys.has(step) && !ORCHESTRATOR_EXEMPTION.includes(step)) {
+          errors.push(
+            `ERROR rules/intents.yaml: intent "${intentName}"'s DAG names minion_type "${step}", which has no rules/allowlists.yaml entry`
+          );
+        }
+      }
+    }
+  }
+
   return { errors, warnings };
 }

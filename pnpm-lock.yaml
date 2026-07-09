@@ -231,6 +231,37 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  extensions/orchestrator:
+    dependencies:
+      framework-core:
+        specifier: workspace:*
+        version: link:../../packages/framework-core
+      js-yaml:
+        specifier: ^4.2.0
+        version: 4.2.0
+      mcp-toolshed:
+        specifier: workspace:*
+        version: link:../mcp-toolshed
+    devDependencies:
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
+      '@types/node':
+        specifier: ^22.15.17
+        version: 22.19.21
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@22.19.21)
+      ts-jest:
+        specifier: ^29.4.11
+        version: 29.4.11(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(jest-util@29.7.0)(jest@29.7.0(@types/node@22.19.21))(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   extensions/slack-bot:
     dependencies:
       '@slack/bolt':
@@ -242,6 +273,9 @@ importers:
       mcp-toolshed:
         specifier: workspace:*
         version: link:../mcp-toolshed
+      orchestrator:
+        specifier: workspace:*
+        version: link:../orchestrator
     devDependencies:
       '@slack/types':
         specifier: ^2.21.1
@@ -276,6 +310,9 @@ importers:
       mcp-toolshed:
         specifier: workspace:*
         version: link:../mcp-toolshed
+      orchestrator:
+        specifier: workspace:*
+        version: link:../orchestrator
     devDependencies:
       '@types/jest':
         specifier: ^29.5.14
@@ -316,6 +353,12 @@ importers:
       framework-core:
         specifier: workspace:*
         version: link:../packages/framework-core
+      orchestrator:
+        specifier: workspace:*
+        version: link:../extensions/orchestrator
+      slack-bot:
+        specifier: workspace:*
+        version: link:../extensions/slack-bot
     devDependencies:
       '@jest/globals':
         specifier: ^29.7.0

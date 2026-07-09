@@ -1,4 +1,4 @@
-export { startToolshedServer, type McpServerAdapter } from './server.js';
+export { startToolshedServer, buildToolshedState, type McpServerAdapter } from './server.js';
 export { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
 export {
   executeTool,
