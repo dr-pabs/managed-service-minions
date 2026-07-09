@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/dr-pabs/managed-service-minions/actions/workflows/ci.yml/badge.svg)](https://github.com/dr-pabs/managed-service-minions/actions/workflows/ci.yml)
 
-> **Status:** the 2026-07-08 remediation ExecPlan (18 milestones) is complete — see the Roadmap below. All TypeScript packages pass typecheck, build, lint, and tests, gated in CI at 95% branch/line and 100% function/statement coverage per package (`adrs/adr-023-100-percent-test-coverage-gate.md`'s 2026-07-09 amendment). Operational runbooks and DR/test scaffolding are in `docs/runbooks/`, `test/performance/`, and `test/chaos/`.
+
 
 ---
 
