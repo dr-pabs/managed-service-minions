@@ -95,6 +95,18 @@ export interface RetryingAuditLogger {
   dlqPath: string;
   /** Current number of entries tracked (queued + in-flight). */
   queueLength: () => number;
+  /**
+   * Resolves once every delivery attempt currently outstanding — including
+   * any backoff sleeps and DLQ writes those attempts trigger — has settled.
+   * Deliveries submitted AFTER `whenIdle()` is called are also awaited (the
+   * set of tracked promises is re-read on each drain pass), so a caller that
+   * stops submitting and then awaits `whenIdle()` is guaranteed the queue is
+   * fully drained. Primary intended uses: graceful shutdown (flush the
+   * best-effort cloud mirror before exit) and deterministic tests (await the
+   * real DLQ/append completion instead of a fixed timer). Purely
+   * observational — it does not change delivery, retry, or DLQ semantics.
+   */
+  whenIdle: () => Promise<void>;
 }
 
 export function createRetryingAuditLogger(options: RetryingAuditLoggerOptions): RetryingAuditLogger {
@@ -114,6 +126,14 @@ export function createRetryingAuditLogger(options: RetryingAuditLoggerOptions): 
   // tracked entry in insertion order.
   const inFlight = new Map<number, AuditEntry>();
   let sequence = 0;
+  // Parallel set of the promises returned by each `attemptDelivery` call, so
+  // `whenIdle()` can await genuine completion (delivery + backoff + DLQ write)
+  // rather than a fixed timer. A promise removes itself on settle; the set is
+  // independent of drop-oldest eviction (an evicted entry's already-running
+  // attempt still settles and is still awaited, which is correct — eviction
+  // stops FUTURE retries by removing it from `inFlight`, it does not abort the
+  // attempt already in progress).
+  const pending = new Set<Promise<void>>();
 
   async function writeToDlq(entry: AuditEntry): Promise<void> {
     try {
@@ -162,10 +182,25 @@ export function createRetryingAuditLogger(options: RetryingAuditLoggerOptions): 
     }
     const key = sequence++;
     inFlight.set(key, entry);
-    void attemptDelivery(key, entry);
+    // Track the attempt's promise so `whenIdle()` can await real completion.
+    // `attemptDelivery` never rejects (it catches everything internally), so
+    // no `.catch` is needed here; the `.finally` just removes it from the set.
+    const settled = attemptDelivery(key, entry).finally(() => {
+      pending.delete(settled);
+    });
+    pending.add(settled);
+  }
+
+  async function whenIdle(): Promise<void> {
+    // Re-read the set each pass: a delivery whose backoff/DLQ chain schedules
+    // further work (or a caller submitting during the drain) is still awaited.
+    while (pending.size > 0) {
+      await Promise.all([...pending]);
+    }
   }
 
   logger.dlqPath = dlqPath;
   logger.queueLength = () => inFlight.size;
+  logger.whenIdle = whenIdle;
   return logger as RetryingAuditLogger;
 }

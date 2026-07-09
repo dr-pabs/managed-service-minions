@@ -21,14 +21,6 @@ function makeEntry(overrides: Partial<AuditEntry> = {}): AuditEntry {
   };
 }
 
-/** Drains the microtask/macrotask queue enough times for pending promise chains to settle. */
-async function flushAsync(times = 10): Promise<void> {
-  for (let i = 0; i < times; i++) {
-    await Promise.resolve();
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}
-
 describe('createRetryingAuditLogger', () => {
   let tmpDir: string;
 
@@ -46,10 +38,45 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath: path.join(tmpDir, 'dlq.jsonl') });
 
     logger(makeEntry());
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('whenIdle() resolves only after every outstanding delivery has settled', async () => {
+    // Gate delivery on a manually-controlled promise so we can observe that
+    // whenIdle() is still pending until the delivery completes.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deliver = jest.fn<(entry: AuditEntry) => Promise<void>>().mockReturnValue(gate);
+    const sleep = jest.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath: path.join(tmpDir, 'dlq.jsonl') });
+
+    logger(makeEntry());
+    let idleResolved = false;
+    const idlePromise = logger.whenIdle().then(() => {
+      idleResolved = true;
+    });
+
+    // Let microtasks flush; whenIdle() must NOT have resolved while deliver hangs.
+    await Promise.resolve();
+    expect(idleResolved).toBe(false);
+    expect(logger.queueLength()).toBe(1);
+
+    release();
+    await idlePromise;
+    expect(idleResolved).toBe(true);
+    expect(logger.queueLength()).toBe(0);
+  });
+
+  it('whenIdle() resolves immediately when nothing is in flight', async () => {
+    const deliver = jest.fn<(entry: AuditEntry) => Promise<void>>().mockResolvedValue(undefined);
+    const logger = createRetryingAuditLogger({ deliver, dlqPath: path.join(tmpDir, 'dlq.jsonl') });
+    await expect(logger.whenIdle()).resolves.toBeUndefined();
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it('a logger that fails twice then succeeds delivers exactly once (retry)', async () => {
@@ -62,7 +89,7 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath: path.join(tmpDir, 'dlq.jsonl') });
 
     logger(makeEntry());
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(deliver).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
@@ -78,7 +105,7 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath: path.join(tmpDir, 'dlq.jsonl') });
 
     logger(makeEntry());
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(sleep.mock.calls[0][0]).toBeGreaterThan(0);
@@ -91,7 +118,7 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath });
 
     logger(makeEntry({ id: 'audit_dlq' }));
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(deliver).toHaveBeenCalledTimes(3);
     expect(existsSync(dlqPath)).toBe(true);
@@ -108,9 +135,9 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath });
 
     logger(makeEntry({ id: 'audit_a' }));
-    await flushAsync();
+    await logger.whenIdle();
     logger(makeEntry({ id: 'audit_b' }));
-    await flushAsync();
+    await logger.whenIdle();
 
     const lines = readFileSync(dlqPath, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(2);
@@ -129,7 +156,7 @@ describe('createRetryingAuditLogger', () => {
     });
 
     expect(() => logger(makeEntry())).not.toThrow();
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(appendDlq).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalled();
@@ -150,7 +177,7 @@ describe('createRetryingAuditLogger', () => {
     });
 
     expect(() => logger(makeEntry())).not.toThrow();
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('disk full string'));
     errorSpy.mockRestore();
@@ -165,7 +192,7 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, sleep, dlqPath });
 
     logger(makeEntry({ id: 'audit_nonerror' }));
-    await flushAsync();
+    await logger.whenIdle();
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('plain string rejection'));
     expect(existsSync(dlqPath)).toBe(true);
@@ -209,8 +236,9 @@ describe('createRetryingAuditLogger', () => {
     });
 
     logger(makeEntry());
-    // No injected sleep: give the real setTimeout(1ms) + microtasks time to run.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Deterministic: await genuine completion of all in-flight deliveries
+    // (real setTimeout-backed sleep + retry) rather than a fixed timer.
+    await logger.whenIdle();
 
     expect(deliver).toHaveBeenCalledTimes(2);
   });
@@ -221,8 +249,10 @@ describe('createRetryingAuditLogger', () => {
     const logger = createRetryingAuditLogger({ deliver, backoffMs: () => 1, dlqPath });
 
     logger(makeEntry({ id: 'audit_real_fs' }));
-    // No injected sleep or appendDlq: wait for real timers + real fs.appendFile.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Deterministic: await the REAL fs.appendFile completion via whenIdle()
+    // (which resolves only after the DLQ write settles) rather than a fixed
+    // timer — this is the fix for the M9-review-diagnosed full-suite flake.
+    await logger.whenIdle();
 
     expect(existsSync(dlqPath)).toBe(true);
     const parsed = JSON.parse(readFileSync(dlqPath, 'utf8').trim()) as AuditEntry;
