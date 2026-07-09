@@ -14,6 +14,7 @@ import { CircuitBreaker, type CircuitBreakerConfig } from './circuit-breaker.js'
 import { type RateLimiter, createRateLimiter } from './rate-limiter.js';
 import type { McpServerAdapter } from './adapter.js';
 import { type GovernanceStateStore, createInProcessGovernanceStateStore } from './governance-state.js';
+import { redactValue, redactSecrets } from './redact.js';
 
 export interface ToolContext {
   teamId: string;
@@ -157,6 +158,29 @@ function truncate(value: unknown, maxLength: number): string {
 }
 
 /**
+ * Invokes the configured `auditLogger` and swallows any failure — sync
+ * throw or rejected promise — so a misbehaving cloud logger (or, in tests,
+ * a stub written to throw) can never surface as a tool-call failure. The
+ * durable audit write is `store.createAuditEntry`, called synchronously
+ * before this, unconditionally; `auditLogger` (in production, a
+ * `createRetryingAuditLogger`-wrapped cloud sink — see `cloud-audit.ts`) is
+ * a best-effort mirror, not the source of truth (invariant 2 is satisfied
+ * by the SQLite write alone).
+ */
+function safeInvokeAuditLogger(auditLogger: (entry: AuditEntry) => void | Promise<void>, entry: AuditEntry): void {
+  try {
+    const result = auditLogger(entry);
+    if (result && typeof (result as Promise<void>).catch === 'function') {
+      (result as Promise<void>).catch((err) => {
+        console.error(`[audit] logger failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+  } catch (err) {
+    console.error(`[audit] logger failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Resolves a pending approval and records who decided it. This is
  * deliberately NOT exposed as an MCP tool (C1 fix, F2): the old
  * `resolveApproval` was reachable by any minion with no authorization check
@@ -229,14 +253,15 @@ function auditRejectedIdentity(
     params: undefined,
     status: result.status,
     latencyMs: 0,
-    error: result.error,
+    // Redacted (M1/F10) for the same reason as emit()'s error handling: the
+    // rejection reason string is free text and this is itself an audited
+    // exit path (invariant 2), so it must never leak a credential either.
+    // `error` is a required string parameter here (not optional, unlike
+    // ToolResult.error in general), so no undefined branch to guard.
+    error: redactSecrets(result.error!),
   };
   state.store.createAuditEntry(entry);
-  Promise.resolve()
-    .then(() => state.auditLogger(entry))
-    .catch((err) => {
-      console.error(`[audit] logger failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
+  safeInvokeAuditLogger(state.auditLogger, entry);
   return result;
 }
 
@@ -328,6 +353,12 @@ export async function executeTool(
 
   const start = Date.now();
   const paramsRecord = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : undefined;
+  // Secret redaction (M1/F10) runs BEFORE truncate(): truncation is a raw
+  // 4KB character cut, so redacting first guarantees a secret is never left
+  // half-visible by a truncation boundary landing in the middle of it.
+  // redactValue walks the PARSED params (field-aware layer, catches secrets
+  // under a sensitive key name regardless of shape), then truncate's own
+  // JSON.stringify serializes the already-redacted structure.
   const auditBase: Omit<AuditEntry, 'id' | 'status' | 'latencyMs' | 'error' | 'retryAfterSeconds' | 'approvalId'> = {
     timestamp: start,
     correlationId: ctx.correlationId,
@@ -335,25 +366,27 @@ export async function executeTool(
     teamId: ctx.teamId,
     serverAlias,
     toolName,
-    params: truncate(params, 4096),
+    params: truncate(redactValue(params), 4096),
   };
 
   function emit(result: ToolResult): ToolResult {
+    // result.error is a free-text string (e.g. an adapter's thrown error
+    // message) that can itself contain a leaked credential (a REST client
+    // echoing back an Authorization header, a connection string in a
+    // downstream failure message) — redactSecrets' pattern-scan layer runs
+    // on it before truncate, same ordering rationale as params above.
+    const redactedError = result.error !== undefined ? redactSecrets(result.error) : undefined;
     const entry: AuditEntry = {
       id: `audit_${randomUUID()}`,
       ...auditBase,
       status: result.status,
       latencyMs: Date.now() - start,
-      error: result.error,
+      error: redactedError,
       retryAfterSeconds: result.retryAfterSeconds,
       approvalId: result.approvalId,
     };
     toolshedState.store.createAuditEntry(entry);
-    Promise.resolve()
-      .then(() => toolshedState.auditLogger(entry))
-      .catch((err) => {
-        console.error(`[audit] logger failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+    safeInvokeAuditLogger(toolshedState.auditLogger, entry);
     return result;
   }
 

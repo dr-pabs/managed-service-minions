@@ -57,7 +57,14 @@ export {
   type ToolDefinition,
   type McpAdapterConfig,
 } from './adapter.js';
-export { createAzureTableAuditLogger, type AuditLogger } from './cloud-audit.js';
+export {
+  createAzureTableAuditLogger,
+  createRetryingAuditLogger,
+  type AuditLogger,
+  type RetryingAuditLogger,
+  type RetryingAuditLoggerOptions,
+} from './cloud-audit.js';
+export { redactSecrets, redactValue } from './redact.js';
 export {
   FileSystemArtifactStore,
   AzureBlobArtifactStore,

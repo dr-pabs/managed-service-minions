@@ -69,6 +69,58 @@ describe('executeTool', () => {
     expect(entry.params).toBe('undefined');
   });
 
+  it('redacts a token field in params before it reaches the STORED audit entry (M1/F10, end-to-end through emit)', async () => {
+    const store = createMemoryStore();
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map(),
+      })
+    );
+    const secretToken = 'a'.repeat(50);
+    await executeTool(baseCtx, 'github', 'delete_repo', { repo: 'evil-repo', token: secretToken });
+
+    const stored = store.listAuditEntries()[0];
+    expect(stored.params).not.toContain(secretToken);
+    expect(stored.params).toContain('«redacted»');
+    // The non-sensitive field survives untouched.
+    expect(stored.params).toContain('evil-repo');
+  });
+
+  it('redacts a secret embedded in result.error before it reaches the STORED audit entry (M1/F10)', async () => {
+    const store = createMemoryStore();
+    const ghToken = `ghp_${'b'.repeat(36)}`;
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([
+          [
+            'github',
+            createMockAdapter('github', {
+              callTool: jest.fn(async () => {
+                throw new Error(`upstream rejected credential ${ghToken}`);
+              }) as never,
+            }),
+          ],
+        ]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+          shellCommands: {},
+        },
+      })
+    );
+    const result = await executeTool(baseCtx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
+    expect(result.status).toBe('error');
+    // Redaction (M1/F10) targets the durable AUDIT TRAIL, not the transient
+    // ToolResult returned to the immediate caller (the caller invoked the
+    // tool and already has the raw error in hand via its own adapter call;
+    // what must never happen is that raw secret being written to storage).
+    const stored = store.listAuditEntries()[0];
+    expect(stored.error).not.toContain(ghToken);
+    expect(stored.error).toContain('«redacted»');
+  });
+
   it('handles non-object params', async () => {
     initializeToolshed(
       createDefaultToolshedState({
@@ -598,6 +650,42 @@ describe('executeTool', () => {
     expect(result.status).toBe('blocked_by_allowlist');
     await new Promise<void>((resolve) => process.nextTick(resolve));
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('string failure'));
+    consoleSpy.mockRestore();
+  });
+
+  it('survives a synchronous audit logger failure that throws a real Error', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    initializeToolshed(
+      createDefaultToolshedState({
+        store: createMemoryStore(),
+        adapters: new Map(),
+        auditLogger: () => {
+          throw new Error('sync sink offline');
+        },
+      })
+    );
+    const result = await executeTool(baseCtx, 'github', 'delete_repo', {});
+    expect(result.status).toBe('blocked_by_allowlist');
+    await new Promise<void>((resolve) => process.nextTick(resolve));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('sync sink offline'));
+    consoleSpy.mockRestore();
+  });
+
+  it('survives an async audit logger failure that rejects with a non-Error', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    initializeToolshed(
+      createDefaultToolshedState({
+        store: createMemoryStore(),
+        adapters: new Map(),
+        auditLogger: async () => {
+          throw 'async string failure';
+        },
+      })
+    );
+    const result = await executeTool(baseCtx, 'github', 'delete_repo', {});
+    expect(result.status).toBe('blocked_by_allowlist');
+    await new Promise<void>((resolve) => process.nextTick(resolve));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('async string failure'));
     consoleSpy.mockRestore();
   });
 
