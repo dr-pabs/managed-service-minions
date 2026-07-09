@@ -125,18 +125,33 @@ export function watchRules(options: WatchRulesOptions): WatchRulesHandle {
     timer = undefined;
     let nextAllowlists;
     let nextGovernance;
+    let errors: string[];
     try {
+      // Both the two loader calls AND validateConfigAtRoot are covered by
+      // this single try/catch (M17 review hardening finding): the loaders
+      // parse ONLY allowlists.yaml/governance.yaml, but validateConfigAtRoot
+      // re-reads the WHOLE config tree from disk (tool-registry.yaml,
+      // intents.yaml, schemas/intent.json, agents/*.md via loadYamlFile/
+      // loadJsonFile in config-validation.ts, neither of which catches its
+      // own yaml.load/JSON.parse) -- any one of those files being
+      // concurrently mid-write/malformed at the moment a watched file's
+      // change event fires throws just as readily as a malformed
+      // allowlists.yaml does. A throw from validateConfigAtRoot must be
+      // rejected exactly like a throw from the loaders, not escape the
+      // setTimeout callback as an unhandled exception (which crashes the
+      // toolshed process -- precisely the fail-open/crash outcome this
+      // milestone exists to prevent).
       nextAllowlists = loadAllowlistsFn(options.allowlistsPath);
       nextGovernance = loadGovernanceFn(options.governancePath);
+      errors = validateConfigAtRoot(options.repoRoot).errors;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[toolshed] hot-reload: failed to parse rules files, keeping old config: ${message}`);
+      console.error(`[toolshed] hot-reload: failed to parse/validate rules files, keeping old config: ${message}`);
       emitReloadAudit(options.store, options.auditLogger, now, false, message);
       options.onReload?.({ accepted: false, errors: [message] });
       return;
     }
 
-    const { errors } = validateConfigAtRoot(options.repoRoot);
     if (errors.length > 0) {
       console.error(
         `[toolshed] hot-reload: rejected invalid config (${errors.length} error(s)), keeping old config:\n${errors.join('\n')}`

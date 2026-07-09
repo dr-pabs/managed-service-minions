@@ -254,6 +254,65 @@ describe('watchRules', () => {
     }
   });
 
+  it('rejects a reload when validateConfigAtRoot itself throws (malformed rules/tool-registry.yaml), instead of crashing the process (M17 review hardening)', async () => {
+    const store = createMemoryStore();
+    const state = createDefaultToolshedState({ store, adapters: new Map() });
+    const { loadAllowlists, loadGovernance } = await import('../config.js');
+    const allowlistsPath = path.join(tmpDir, 'rules', 'allowlists.yaml');
+    const governancePath = path.join(tmpDir, 'rules', 'governance.yaml');
+    state.allowlists = loadAllowlists(allowlistsPath);
+    state.governance = loadGovernance(governancePath);
+    const originalAllowlists = state.allowlists;
+    const originalGovernance = state.governance;
+
+    const auditEntries: AuditEntry[] = [];
+    const handle = watchRules({
+      repoRoot: tmpDir,
+      allowlistsPath,
+      governancePath,
+      state,
+      store,
+      auditLogger: (entry) => {
+        auditEntries.push(entry);
+      },
+      debounceMs: 20,
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // allowlists.yaml and governance.yaml (what loadAllowlistsFn/
+      // loadGovernanceFn parse) are both left VALID here -- the loader
+      // try/catch in performReload would not catch this. The corruption is
+      // in rules/tool-registry.yaml, which validateConfigAtRoot reads
+      // directly via loadYamlFile/yaml.load with no try/catch of its own
+      // (config-validation.ts). Before the fix, this throw escaped
+      // performReload (which only wrapped the two loader calls) as an
+      // unhandled exception out of the setTimeout callback.
+      //
+      // watchRules only watches allowlistsPath/governancePath (not
+      // tool-registry.yaml directly -- see the milestone spec), matching
+      // the exact scenario the finding describes: an operator edits a
+      // WATCHED file (governance.yaml here, re-written with its own
+      // unchanged valid content) while tool-registry.yaml is concurrently
+      // mid-write/malformed -- the watch event fires from the watched
+      // file's own edit, and validateConfigAtRoot picks up the OTHER,
+      // corrupted file when it re-reads the whole tree.
+      writeFile(path.join(tmpDir, 'rules', 'tool-registry.yaml'), 'registry: [unterminated');
+      writeFile(governancePath, ['governance:', '  destructive_actions: []'].join('\n'));
+
+      await waitFor(() => auditEntries.some((e) => e.status === 'config_reload_rejected'));
+
+      // Old config must still be in effect (identity-preserved) -- the
+      // "broken edit is inert" guarantee holds even when the throw comes
+      // from validateConfigAtRoot rather than the loaders.
+      expect(state.allowlists).toBe(originalAllowlists);
+      expect(state.governance).toBe(originalGovernance);
+      expect(auditEntries.some((e) => e.status === 'config_reloaded')).toBe(false);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('does not reload after close() even if a debounced write was already scheduled', async () => {
     const store = createMemoryStore();
     const state = createDefaultToolshedState({ store, adapters: new Map() });
