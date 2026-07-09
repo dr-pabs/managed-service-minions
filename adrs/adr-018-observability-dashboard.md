@@ -2,7 +2,7 @@
 
 | Key | Value |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted (Tier 2 implemented 2026-07-09 — see status note below) |
 | **Date** | 2026-06-05 |
 | **Deciders** | Goose Agent Framework team |
 | **Replaces** | — |
@@ -133,3 +133,9 @@ A Goose extension providing:
 - **Grafana essential plan is limited to 2 dashboards** — Mitigation: Standard plan at ~$9/user/month if more are needed. Or use Azure Monitor Workbooks as a free alternative for secondary dashboards.
 - **Custom dashboard is Phase 4 effort** — Mitigation: Grafana covers operational needs from Day 1. The custom dashboard is a UX/developer-experience improvement, not a launch dependency.
 - **Log Analytics cost grows with volume** — Mitigation: Tool call logs in Log Analytics are sampled/aggregated for dashboard queries. Raw detail lives in Table Storage (cheaper). Set data caps.
+
+---
+
+## Status note (2026-07-09): Tier 2 custom dashboard implemented
+
+The Tier 2 custom `agent-dashboard` described above was delivered by the 2026-07-08 remediation ExecPlan (Milestone 14, `extensions/agent-dashboard`): bearer-token auth (with the `?token=` query fallback scoped to `/api/events` for browser `EventSource`), SSE live updates, a pending-approvals panel with approve/deny proxying through the governed toolshed, audit search, and a token-cost view. Entra ID easy-auth for production is documented in Terraform. Status accordingly moves Proposed → Accepted. The Tier 1 Grafana dashboards and alert rules remain as designed here and are provisioned via `infra/terraform`.

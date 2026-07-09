@@ -60,3 +60,9 @@ A red build means the codebase is in danger. The loop continues — notification
 - `../docs/testing-strategy.md` §Red Build Policy
 - `AGENTS.md` §Build, test, and validation guidance
 - `docs/execplan/execution-plan.md` §Validation and Acceptance
+
+---
+
+## Amendment note (2026-07-09): coverage thresholds referenced above
+
+The Context above lists "100% coverage" among the quality gates. As of the ADR-023 amendment of 2026-07-09, the enforced thresholds are 95% branches/lines and 100% functions/statements; see ADR-023's amendment section for the rationale. That amendment is the "written exemption" Policy Rule 2 requires — the red build policy itself is unchanged, and whatever thresholds ADR-023 currently defines are the ones this policy enforces.
