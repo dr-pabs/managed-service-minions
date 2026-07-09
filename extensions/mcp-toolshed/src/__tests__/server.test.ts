@@ -5,6 +5,12 @@ import { mintMinionToken } from 'framework-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// extensions/mcp-toolshed/src/__tests__ -> repo root is four levels up
+// (matches config-validation.test.ts's own REPO_ROOT derivation).
+const REAL_REPO_ROOT = path.resolve(HERE, '../../../../');
 
 const mockSetRequestHandler = jest.fn() as jest.Mock<any>;
 const mockConnect = jest.fn() as jest.Mock<any>;
@@ -58,6 +64,7 @@ describe('server', () => {
     delete process.env.TOOLSHED_REPO_ROOT;
     delete process.env.TOOLSHED_SIGNING_SECRET;
     delete process.env.TOOLSHED_ALLOW_UNSIGNED;
+    delete process.env.TOOLSHED_WATCH_RULES;
     delete process.env.NODE_ENV;
     resetToolshed();
   });
@@ -331,6 +338,45 @@ describe('server', () => {
         },
       });
       expect(response.content[0].text).toContain('blocked_by_allowlist');
+    });
+
+    describe('TOOLSHED_WATCH_RULES (Milestone 17, F16)', () => {
+      it('is disabled by default: startToolshedServer returns no hotReload handle', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        expect(hotReload).toBeUndefined();
+      });
+
+      it('warns and stays disabled when TOOLSHED_WATCH_RULES=1 but no allowlists/governance paths are set', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        process.env.TOOLSHED_WATCH_RULES = '1';
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        expect(hotReload).toBeUndefined();
+        expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('nothing to watch'))).toBe(true);
+        warnSpy.mockRestore();
+      });
+
+      it('starts a watcher against the real allowlists/governance paths when TOOLSHED_WATCH_RULES=1', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        process.env.TOOLSHED_WATCH_RULES = '1';
+        process.env.TOOLSHED_REPO_ROOT = REAL_REPO_ROOT;
+        process.env.TOOLSHED_ALLOWLISTS_PATH = path.join(REAL_REPO_ROOT, 'rules', 'allowlists.yaml');
+        process.env.TOOLSHED_GOVERNANCE_PATH = path.join(REAL_REPO_ROOT, 'rules', 'governance.yaml');
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        try {
+          expect(hotReload).toBeDefined();
+          expect(logSpy.mock.calls.some((call) => String(call[0]).includes('hot-reload enabled'))).toBe(true);
+        } finally {
+          hotReload?.close();
+          logSpy.mockRestore();
+          delete process.env.TOOLSHED_REPO_ROOT;
+        }
+      });
     });
   });
 });

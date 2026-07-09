@@ -15,6 +15,7 @@ import { createRateLimiter } from './rate-limiter.js';
 import { createMcpAdapter, type McpServerAdapter, type McpAdapterConfig } from './adapter.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
+import { watchRules, type WatchRulesHandle } from './hot-reload.js';
 
 // This file lives at extensions/mcp-toolshed/src/server.ts (or, once built,
 // extensions/mcp-toolshed/dist/server.js) — three directories below the
@@ -171,7 +172,7 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
  * `port` argument — previously named `_port` and never used, a Low finding
  * this milestone resolves.
  */
-export async function startToolshedServer(port: number): Promise<{ operatorHttp: OperatorHttpServer }> {
+export async function startToolshedServer(port: number): Promise<{ operatorHttp: OperatorHttpServer; hotReload?: WatchRulesHandle }> {
   const state = await buildToolshedState();
   initializeToolshed(state);
 
@@ -182,6 +183,36 @@ export async function startToolshedServer(port: number): Promise<{ operatorHttp:
     );
   }
   const operatorHttp = await startOperatorHttpServer(state.store, port, operatorToken);
+
+  // Rules hot-reload (Milestone 17, F16): opt-in via TOOLSHED_WATCH_RULES=1.
+  // Only meaningful when the toolshed was actually pointed at real
+  // allowlists/governance YAML files (TOOLSHED_ALLOWLISTS_PATH/
+  // TOOLSHED_GOVERNANCE_PATH) — with no path set, buildToolshedState already
+  // fell back to the hardcoded defaults and there is nothing on disk to
+  // watch. Reuses the exact same env vars buildToolshedState() itself reads,
+  // so "what the toolshed loaded at startup" and "what watchRules watches"
+  // can never point at different files.
+  let hotReload: WatchRulesHandle | undefined;
+  if (process.env.TOOLSHED_WATCH_RULES === '1') {
+    const allowlistsPath = process.env.TOOLSHED_ALLOWLISTS_PATH;
+    const governancePath = process.env.TOOLSHED_GOVERNANCE_PATH;
+    const repoRoot = process.env.TOOLSHED_REPO_ROOT ?? DEFAULT_REPO_ROOT;
+    if (!allowlistsPath || !governancePath) {
+      console.warn(
+        '[toolshed] TOOLSHED_WATCH_RULES=1 is set but TOOLSHED_ALLOWLISTS_PATH/TOOLSHED_GOVERNANCE_PATH are not both set — nothing to watch, hot-reload disabled.'
+      );
+    } else {
+      hotReload = watchRules({
+        repoRoot,
+        allowlistsPath,
+        governancePath,
+        state,
+        store: state.store,
+        auditLogger: state.auditLogger,
+      });
+      console.log(`[toolshed] hot-reload enabled: watching ${allowlistsPath} and ${governancePath}`);
+    }
+  }
 
   const server = new Server(
     { name: 'mcp-toolshed', version: '0.1.0' },
@@ -216,5 +247,5 @@ export async function startToolshedServer(port: number): Promise<{ operatorHttp:
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  return { operatorHttp };
+  return { operatorHttp, hotReload };
 }

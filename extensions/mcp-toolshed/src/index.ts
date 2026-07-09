@@ -72,3 +72,8 @@ export {
   createInMemoryArtifactStore,
   type ArtifactStore,
 } from './artifact-store.js';
+export {
+  watchRules,
+  type WatchRulesOptions,
+  type WatchRulesHandle,
+} from './hot-reload.js';
