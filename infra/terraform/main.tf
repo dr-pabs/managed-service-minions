@@ -213,6 +213,15 @@ module "container_apps" {
     identity_id = module.managed_identity.dashboard_id
     image       = "${module.container_registry.login_server}/agent-dashboard:latest"
     port        = 3001
+    # Milestone 14 (review finding M7): set both to enable Azure Container
+    # Apps' Entra ID "easy auth" as this app's production front door — see
+    # modules/container_apps/main.tf's azapi_resource.dashboard_easy_auth.
+    # Left null here (module default) until an Entra app registration and
+    # its client secret (provisioned into Key Vault, referenced as a
+    # Container App secret) exist for this environment; DASHBOARD_AUTH_TOKEN
+    # is the dashboard's own fallback either way.
+    entra_client_id = null
+    entra_tenant_id = null
   }
 
   toolshed = {

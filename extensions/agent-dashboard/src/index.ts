@@ -6,7 +6,16 @@ async function main(): Promise<void> {
   const storePath = process.env.SQLITE_PATH ?? '/data/dashboard.db';
   const store = createSqliteStore(storePath);
 
-  await startDashboardServer(store, port);
+  // Milestone 14 (review finding M7 "dashboard has no auth"): DASHBOARD_AUTH_TOKEN
+  // gates every route locally; production instead fronts this Container App
+  // with Azure Entra ID easy-auth (see infra/terraform/modules/container_apps).
+  // TOOLSHED_OPERATOR_URL/TOOLSHED_OPERATOR_TOKEN let the approve/deny routes
+  // proxy to the toolshed's own operator HTTP endpoint (Milestone 4).
+  await startDashboardServer(store, port, undefined, [], undefined, {
+    authToken: process.env.DASHBOARD_AUTH_TOKEN,
+    operatorUrl: process.env.TOOLSHED_OPERATOR_URL,
+    operatorToken: process.env.TOOLSHED_OPERATOR_TOKEN,
+  });
 }
 
 main().catch((err) => {
