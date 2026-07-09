@@ -1,3 +1,4 @@
+import { fetchWithRetry, paginateGitHub, type RetryPolicy } from 'framework-core';
 import { GitHubApiError } from './errors.js';
 import type {
   CreatePullRequestInput,
@@ -8,6 +9,11 @@ import type {
   PullRequest,
   PullRequestSummary,
 } from './types.js';
+
+/** Safety cap on total items collected across paginated list endpoints. */
+const DEFAULT_MAX_ITEMS = 500;
+/** Page size requested per call when paginating (GitHub's max is 100). */
+const PAGE_SIZE = 100;
 
 export interface GitHubClient {
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestSummary[]>;
@@ -20,6 +26,10 @@ export interface GitHubClient {
 export interface GitHubClientOptions {
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  /** Retry/backoff policy applied to every request. Defaults per `http-retry.ts`. */
+  retryPolicy?: RetryPolicy;
+  /** Safety cap on items returned by paginated list endpoints. Default 500. */
+  maxItems?: number;
 }
 
 export function createGitHubClient(
@@ -28,6 +38,8 @@ export function createGitHubClient(
 ): GitHubClient {
   const baseUrl = (options.baseUrl ?? 'https://api.github.com').replace(/\/+$/u, '');
   const fetchFn = options.fetchFn ?? globalThis.fetch;
+  const retryPolicy = options.retryPolicy ?? {};
+  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
 
   const defaultHeaders: Record<string, string> = {
     Accept: 'application/vnd.github+json',
@@ -36,34 +48,41 @@ export function createGitHubClient(
     'User-Agent': 'mcp-github',
   };
 
+  function buildUrl(path: string, params?: Record<string, string | number>): string {
+    const query = params
+      ? `?${new URLSearchParams(
+          Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)]))
+        ).toString()}`
+      : '';
+    return `${baseUrl}${path}${query}`;
+  }
+
+  async function raiseForStatus(response: Response): Promise<never> {
+    const text = await response.text();
+    throw new GitHubApiError(`GitHub API error ${response.status}: ${text}`, response.status, text);
+  }
+
   async function request(
     path: string,
     init: RequestInit & { params?: Record<string, string | number> }
   ): Promise<Response> {
-    const query = init.params
-      ? `?${new URLSearchParams(
-          Object.fromEntries(
-            Object.entries(init.params).map(([key, value]) => [key, String(value)])
-          )
-        ).toString()}`
-      : '';
-    const url = `${baseUrl}${path}${query}`;
+    const url = buildUrl(path, init.params);
 
-    const response = await fetchFn(url, {
-      ...init,
-      headers: {
-        ...defaultHeaders,
-        ...(init.headers ?? {}),
+    const response = await fetchWithRetry(
+      fetchFn,
+      url,
+      {
+        ...init,
+        headers: {
+          ...defaultHeaders,
+          ...(init.headers ?? {}),
+        },
       },
-    });
+      retryPolicy
+    );
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new GitHubApiError(
-        `GitHub API error ${response.status}: ${text}`,
-        response.status,
-        text
-      );
+      await raiseForStatus(response);
     }
 
     return response;
@@ -71,12 +90,25 @@ export function createGitHubClient(
 
   return {
     async listPullRequests(input): Promise<PullRequestSummary[]> {
-      const params: Record<string, string> = { state: input.state };
+      // An explicit limit is a caller-bounded single page (preserves prior behavior);
+      // otherwise page through the full result set via Link headers up to maxItems.
       if (input.limit !== undefined) {
-        params.per_page = String(input.limit);
+        const response = await request(`/repos/${input.owner}/${input.repo}/pulls`, {
+          params: { state: input.state, per_page: input.limit },
+        });
+        return (await response.json()) as PullRequestSummary[];
       }
-      const response = await request(`/repos/${input.owner}/${input.repo}/pulls`, { params });
-      return (await response.json()) as PullRequestSummary[];
+
+      const firstUrl = buildUrl(`/repos/${input.owner}/${input.repo}/pulls`, {
+        state: input.state,
+        per_page: PAGE_SIZE,
+      });
+      return paginateGitHub<PullRequestSummary>(fetchFn, firstUrl, {
+        ...retryPolicy,
+        maxItems,
+        onError: raiseForStatus,
+        init: { headers: defaultHeaders },
+      });
     },
 
     async getPullRequest(input): Promise<PullRequest> {

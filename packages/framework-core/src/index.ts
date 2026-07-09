@@ -9,3 +9,4 @@ export * from './minion-token.js';
 export * from './canonical-json.js';
 export * from './agent-frontmatter.js';
 export * from './output-contract.js';
+export * from './http-retry.js';

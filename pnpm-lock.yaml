@@ -72,6 +72,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.15.0
         version: 1.29.0(zod@3.25.76)
+      framework-core:
+        specifier: workspace:*
+        version: link:../../packages/framework-core
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -100,6 +103,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.15.0
         version: 1.29.0(zod@3.25.76)
+      framework-core:
+        specifier: workspace:*
+        version: link:../../packages/framework-core
       zod:
         specifier: ^3.24.2
         version: 3.25.76
@@ -128,6 +134,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.15.0
         version: 1.29.0(zod@3.25.76)
+      framework-core:
+        specifier: workspace:*
+        version: link:../../packages/framework-core
       zod:
         specifier: ^3.24.2
         version: 3.25.76
@@ -156,6 +165,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.15.0
         version: 1.29.0(zod@3.25.76)
+      framework-core:
+        specifier: workspace:*
+        version: link:../../packages/framework-core
       zod:
         specifier: ^3.24.2
         version: 3.25.76

@@ -20,12 +20,21 @@ describe('createServiceNowClient', () => {
     expect(defaultClient).toBeDefined();
   });
 
-  function mockResponse(response: { ok: boolean; status: number; text: string }) {
-    fetchFn.mockResolvedValue({
+  function toResponse(response: { ok: boolean; status: number; text: string; headers?: Record<string, string> }) {
+    const headerMap = new Map(
+      Object.entries(response.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v])
+    );
+    return {
       ok: response.ok,
       status: response.status,
+      headers: { get: (name: string) => headerMap.get(name.toLowerCase()) ?? null },
       text: async () => response.text,
-    });
+      json: async () => (response.text ? JSON.parse(response.text) : undefined),
+    };
+  }
+
+  function mockResponse(response: { ok: boolean; status: number; text: string }) {
+    fetchFn.mockResolvedValue(toResponse(response));
   }
 
   it('uses the expected base URL and auth header', async () => {
@@ -43,27 +52,148 @@ describe('createServiceNowClient', () => {
   });
 
   describe('listIncidents', () => {
-    it('lists with no filters', async () => {
+    it('lists with no filters, paginating via sysparm_offset', async () => {
       mockResponse({ ok: true, status: 200, text: '{"result":[]}' });
       await client.listIncidents();
       const [url] = fetchFn.mock.calls[0] as [string];
-      expect(url).toBe('https://testinstance.service-now.com/api/now/table/incident');
+      expect(url).toContain('sysparm_offset=0');
+      expect(url).toContain('sysparm_limit=100');
     });
 
-    it('lists with limit and state', async () => {
+    it('lists with limit and state as a single bounded page (no pagination)', async () => {
       mockResponse({ ok: true, status: 200, text: '{"result":[]}' });
       await client.listIncidents(10, '1');
+      expect(fetchFn).toHaveBeenCalledTimes(1);
       const [url] = fetchFn.mock.calls[0] as [string];
       expect(url).toContain('sysparm_limit=10');
       expect(url).toContain('sysparm_query=state%3D1');
+      expect(url).not.toContain('sysparm_offset');
     });
 
-    it('lists with only state', async () => {
+    it('lists with only state, paginating', async () => {
       mockResponse({ ok: true, status: 200, text: '{"result":[]}' });
       await client.listIncidents(undefined, '2');
       const [url] = fetchFn.mock.calls[0] as [string];
       expect(url).toContain('sysparm_query=state%3D2');
-      expect(url).not.toContain('sysparm_limit');
+      expect(url).toContain('sysparm_limit=100');
+    });
+
+    it('follows a three-page offset traversal and concatenates results', async () => {
+      const fullPage = (start: number) =>
+        Array.from({ length: 100 }, (_, i) => ({ sys_id: String(start + i) }));
+      fetchFn.mockImplementation(async (url: string) => {
+        const u = new URL(url);
+        const offset = Number(u.searchParams.get('sysparm_offset') ?? '0');
+        if (offset === 0) {
+          return toResponse({ ok: true, status: 200, text: JSON.stringify({ result: fullPage(1) }) });
+        }
+        if (offset === 100) {
+          return toResponse({ ok: true, status: 200, text: JSON.stringify({ result: fullPage(101) }) });
+        }
+        if (offset === 200) {
+          return toResponse({ ok: true, status: 200, text: JSON.stringify({ result: [{ sys_id: '301' }] }) });
+        }
+        return toResponse({ ok: true, status: 200, text: '{"result":[]}' });
+      });
+      const result = (await client.listIncidents()) as { result: unknown[] };
+      expect(result.result).toHaveLength(201);
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+    });
+
+    it('threads auth headers through every paginated page', async () => {
+      mockResponse({ ok: true, status: 200, text: '{"result":[]}' });
+      await client.listIncidents();
+      const [, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+      expect(init.headers).toMatchObject({
+        Authorization: `Basic ${Buffer.from('testuser:testpass').toString('base64')}`,
+      });
+    });
+
+    it('halts at the maxItems safety cap', async () => {
+      const capped = createServiceNowClient({ instance, username, password, fetchFn, maxItems: 3 });
+      fetchFn.mockImplementation(async () =>
+        toResponse({ ok: true, status: 200, text: JSON.stringify({ result: [{ sys_id: '1' }, { sys_id: '2' }] }) })
+      );
+      const result = (await capped.listIncidents()) as { result: unknown[] };
+      expect(result.result.length).toBeLessThanOrEqual(3);
+    });
+
+    it('treats a malformed page body (missing/non-array result) as an empty page', async () => {
+      mockResponse({ ok: true, status: 200, text: '{}' });
+      const result = (await client.listIncidents()) as { result: unknown[] };
+      expect(result.result).toEqual([]);
+    });
+
+    it('surfaces ServiceNowApiError from errors.ts when a page in the traversal fails', async () => {
+      mockResponse({ ok: false, status: 500, text: '{"error":"boom"}' });
+      const error = await client.listIncidents().catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceNowApiError);
+      expect(error.status).toBe(500);
+    });
+  });
+
+  describe('retry/backoff (M8, F13)', () => {
+    it('does not retry createIncident (POST) by default on a 503', async () => {
+      const retryClient = createServiceNowClient({
+        instance,
+        username,
+        password,
+        fetchFn,
+        retryPolicy: { sleep: async () => undefined, random: () => 0.5 },
+      });
+      mockResponse({ ok: false, status: 503, text: '{"error":"unavailable"}' });
+      const error = await retryClient.createIncident({ short_description: 'x' }).catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceNowApiError);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('honors Retry-After (delta-seconds) on a 429 within the paginated traversal', async () => {
+      const sleep = jest.fn(async () => undefined);
+      const retryClient = createServiceNowClient({
+        instance,
+        username,
+        password,
+        fetchFn,
+        retryPolicy: { sleep, random: () => 0.5 },
+      });
+      fetchFn
+        .mockResolvedValueOnce(
+          toResponse({ ok: false, status: 429, text: '', headers: { 'Retry-After': '2' } })
+        )
+        .mockResolvedValue(toResponse({ ok: true, status: 200, text: '{"result":[]}' }));
+      await retryClient.listIncidents();
+      expect(sleep).toHaveBeenCalledWith(2000);
+    });
+
+    it('exhausts retries on a persistent 502 for getIncidentBySysId and surfaces ServiceNowApiError from errors.ts', async () => {
+      const retryClient = createServiceNowClient({
+        instance,
+        username,
+        password,
+        fetchFn,
+        retryPolicy: { maxAttempts: 3, sleep: async () => undefined, random: () => 0 },
+      });
+      mockResponse({ ok: false, status: 502, text: '{"error":"bad gateway"}' });
+      const error = await retryClient.getIncidentBySysId('abc123').catch((e) => e);
+      expect(error).toBeInstanceOf(ServiceNowApiError);
+      expect(error.status).toBe(502);
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+    });
+
+    it('retries updateIncident (PUT) on a 503 and eventually succeeds', async () => {
+      const retryClient = createServiceNowClient({
+        instance,
+        username,
+        password,
+        fetchFn,
+        retryPolicy: { sleep: async () => undefined, random: () => 0.5 },
+      });
+      fetchFn
+        .mockResolvedValueOnce(toResponse({ ok: false, status: 503, text: '' }))
+        .mockResolvedValueOnce(toResponse({ ok: true, status: 200, text: '{"result":{"sys_id":"abc"}}' }));
+      const result = await retryClient.updateIncident('abc', { state: '2' });
+      expect(result).toEqual({ result: { sys_id: 'abc' } });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
     });
   });
 
