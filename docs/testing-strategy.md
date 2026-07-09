@@ -52,13 +52,13 @@ graph TB
 
 ## Coverage Requirement
 
-The framework requires **100% code coverage** for all runnable TypeScript code in `packages/` and `extensions/` without exception. This is a non-negotiable quality gate.
+The framework requires **95% branch and line coverage, 100% function and statement coverage** for all runnable TypeScript code in `packages/` and `extensions/` without exception (lowered from a strict 100% across all four metrics on 2026-07-09 — see `../adrs/adr-023-100-percent-test-coverage-gate.md`'s amendment for the padding-test rationale). This is a non-negotiable quality gate.
 
-- Coverage is measured by line, branch, function, and statement.
-- The CI pipeline fails if coverage in any package drops below 100%.
+- Coverage is measured by line, branch, function, and statement; each package's `jest.config.js` `coverageThreshold` is the authoritative source of the exact numbers.
+- The CI pipeline fails if coverage in any package drops below its configured threshold.
 - Any code that cannot be covered by automated tests must be annotated with a written justification in the PR and approved by a maintainer.
 - Exemptions are only granted for generated code, third-party vendored code, or platform-specific shims, and must be explicitly excluded in the package's `jest.config.js` with a documented rationale.
-- New code cannot be merged unless it maintains or improves 100% coverage.
+- New code cannot be merged unless it maintains or improves the package's configured coverage threshold.
 
 ---
 
@@ -517,6 +517,6 @@ flowchart TB
     style prompt_tests fill:#fcf3cf,stroke:#d4ac0d,color:#1a1a1a
 ```
 
-**PR checks:** Unit + Integration + Security + Prompt Quality (prompt changes only) + **100% coverage check**. All must pass before merge.
+**PR checks:** Unit + Integration + Security + Prompt Quality (prompt changes only) + **coverage threshold check** (95% branches/lines, 100% functions/statements). All must pass before merge.
 
 **Post-merge:** E2E smoke tests in staging. Nightly: full E2E suite + performance tests. Weekly: chaos tests.

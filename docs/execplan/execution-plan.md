@@ -1,4 +1,4 @@
-# Deliver the Goose Agent Framework v1
+# Deliver the Minions Agent Framework v1
 
 > This ExecPlan is a living document. Maintain it in accordance with `.agents/PLANS.md`. It is intended to be self-contained: a contributor who has only this file and the current working tree should be able to implement the framework end-to-end.
 

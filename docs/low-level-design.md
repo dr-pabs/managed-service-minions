@@ -1,4 +1,4 @@
-# Goose Agent Framework — Low-Level Design
+# Minions Agent Framework — Low-Level Design
 
 > **Status:** Draft  
 > **Date:** 2026-06-14  
@@ -8,7 +8,7 @@
 
 ## 1. Purpose and Scope
 
-This document is the low-level design for the **Goose Agent Framework v1**. It describes:
+This document is the low-level design for the **Minions Agent Framework v1**. It describes:
 
 1. The Goose primitives we rely on (plugins, extensions, agents, skills, recipes, hooks, sessions, tools).
 2. What the framework *adds* on top of Goose to meet the minion requirements: orchestration, governance, observability, durability, and chat ingress.
@@ -243,15 +243,17 @@ Recipes are parameterized YAML task templates. They are stored in the plugin's `
 Therefore plugin recipes are run/validated by full path:
 
 ```bash
-goose run --recipe ~/.agents/plugins/goose-agent-framework/commands/daily-pr-review.yaml
-goose recipe validate ~/.agents/plugins/goose-agent-framework/commands/daily-pr-review.yaml
+goose run --recipe ~/.agents/plugins/minions-agent-framework/commands/daily-pr-review.yaml
+goose recipe validate ~/.agents/plugins/minions-agent-framework/commands/daily-pr-review.yaml
 ```
 
-For local development, export `GOOSE_RECIPE_PATH=$HOME/.agents/plugins/goose-agent-framework/commands` so `goose recipe list` finds them.
+For local development, export `GOOSE_RECIPE_PATH=$HOME/.agents/plugins/minions-agent-framework/commands` so `goose recipe list` finds them.
 
 ### 2.11 Hooks
 
-The plugin manifest references `hooks/hooks.json`. Hooks are lifecycle callbacks the Goose runtime can invoke. The framework uses hooks for:
+> **Update (2026-07-09, Milestone 18 hygiene sweep):** `hooks/hooks.json` was an empty placeholder (`{"on_session_start": [], "on_session_end": []}`) referencing lifecycle scripts (`log_session_start.sh`, `backup_sqlite.sh`) that were never implemented, and has been deleted along with the `"hooks"` field in `.plugin/plugin.json`. The design intent described below (session logging, SQLite backup triggers, correlation ID seeding via Goose lifecycle hooks) remains a real future option, but is not built today — this section is retained as design record, not a description of current behavior.
+
+The plugin manifest previously referenced `hooks/hooks.json`. Hooks are lifecycle callbacks the Goose runtime can invoke. The framework's design intended hooks for:
 
 - Session start/end logging.
 - Backup triggers (SQLite → Blob Storage).
@@ -432,10 +434,10 @@ The framework layers the following capabilities on top of Goose:
 
 ```json
 {
-  "name": "goose-agent-framework",
+  "name": "minions-agent-framework",
   "version": "0.1.0",
   "description": "Multi-agent orchestration framework for engineering operations.",
-  "repository": "https://github.com/your-org/goose-agent-framework",
+  "repository": "https://github.com/your-org/minions-agent-framework",
   "agents": "./agents/",
   "skills": "./skills/",
   "commands": "./commands/",
@@ -548,7 +550,9 @@ instructions: |
 
 ### 4.6 Hooks
 
-`hooks/hooks.json` registers scripts for session lifecycle events. Example:
+> Removed as of Milestone 18 (2026-07-09) — see §2.11. `hooks/hooks.json` was deleted; it was an empty scaffold and the scripts referenced below were never written. Kept here as design record only.
+
+`hooks/hooks.json` was intended to register scripts for session lifecycle events. Example (never implemented):
 
 ```json
 {
@@ -1118,13 +1122,12 @@ Azure Managed Grafana queries Log Analytics and Table Storage to show:
 ### 13.1 Repository Layout
 
 ```
-goose-agent-framework/
+minions-agent-framework/
 ├── .plugin/plugin.json
 ├── agents/
 ├── skills/
 ├── commands/
 ├── rules/
-├── hooks/
 ├── schemas/
 ├── packages/framework-core/     # shared TypeScript library
 ├── extensions/
@@ -1151,7 +1154,7 @@ A production framework process runs `goose serve` with the plugin and extensions
 
 ```
 Goose ACP Server (goose serve)
-├── loaded plugin: goose-agent-framework
+├── loaded plugin: minions-agent-framework
 │   ├── agents, skills, commands, rules, hooks
 ├── built-in extensions
 │   ├── developer, analyze, summon, apps, todo, chatrecall, orchestrator

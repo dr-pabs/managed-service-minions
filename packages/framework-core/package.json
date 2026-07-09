@@ -2,7 +2,7 @@
   "name": "framework-core",
   "version": "0.1.0",
   "type": "module",
-  "description": "Shared core library for the Goose Agent Framework.",
+  "description": "Shared core library for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

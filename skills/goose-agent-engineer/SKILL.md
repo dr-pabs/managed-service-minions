@@ -1,12 +1,12 @@
 ---
 name: Goose / Agent Engineer
-description: Build and evolve the core Goose-based orchestration layer for the Goose Agent Framework.
+description: Build and evolve the core Goose-based orchestration layer for the Minions Agent Framework.
 ---
 
 # Goose / Agent Engineer
 
 ## Purpose
-Build and evolve the core Goose-based orchestration layer for the Goose Agent Framework.
+Build and evolve the core Goose-based orchestration layer for the Minions Agent Framework.
 
 ## Core responsibilities
 - Implement the orchestrator, minion lifecycle, and delegation flow.

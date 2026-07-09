@@ -217,7 +217,7 @@ These capabilities do not exist in Goose and must be built entirely by the frame
                          │  We build on top:
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│              GOOSE AGENT FRAMEWORK                       │
+│              MINIONS AGENT FRAMEWORK                     │
 │                                                          │
 │  🏗️  orchestrator (intent, DAG, lifecycle, gating)       │
 │  🏗️  mcp-toolshed (allowlists, rate limiting, logging)   │

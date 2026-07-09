@@ -14,7 +14,7 @@ The custom `agent-dashboard` is a Goose extension (built via `apps__create_app`)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Goose Agent Framework                        [Settings ⚙]  │
+│  Minions Agent Framework                       [Settings ⚙]  │
 ├─────────────────────────────────────────────────────────────┤
 │  [Sessions] [Live] [Tool Calls] [Cost] [Prompts] [Config]  │
 ├─────────────────────────────────────────────────────────────┤

@@ -40,7 +40,7 @@ describe('startDashboardServer', () => {
     expect(response.status).toBe(200);
     expect(response.contentType).toContain('text/html');
     expect(response.body as string).toContain('<!doctype html>');
-    expect(response.body as string).toContain('Goose Agent Dashboard');
+    expect(response.body as string).toContain('Minions Agent Dashboard');
   });
 
   it('returns ok from /health', async () => {

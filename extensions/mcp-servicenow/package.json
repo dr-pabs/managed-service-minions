@@ -1,8 +1,8 @@
 {
-  "name": "@goose-agent-framework/mcp-servicenow",
+  "name": "@minions-agent-framework/mcp-servicenow",
   "version": "0.1.0",
   "type": "module",
-  "description": "ServiceNow MCP server for Goose minion incident management.",
+  "description": "ServiceNow MCP server extension for the Minions Agent Framework: incident management.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

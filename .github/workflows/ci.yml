@@ -84,14 +84,13 @@ jobs:
       - name: Validate config (agents/rules/schemas cross-check)
         run: pnpm tsx scripts/validate-config.ts
 
+      # Coverage gate: each package's own `test` script already runs `jest --coverage`, and each
+      # package's jest.config.js enforces branches/lines >= 95%, functions/statements = 100%.
+      # jest exits non-zero when a package drops below its threshold, which fails this step and
+      # the job -- this genuinely gates the build, it is not a cosmetic echo. See ADR-023's
+      # 2026-07-09 amendment for why 100% branches/lines was lowered to 95%.
       - name: Unit tests with coverage
-        run: pnpm -r --filter "!infra" test --coverage
-
-      - name: Verify 100% coverage
-        run: |
-          # Each package's jest.config.js enforces 100% thresholds.
-          # This step fails if any package reports coverage below 100%.
-          echo "Coverage gate enforced by Jest thresholds."
+        run: pnpm -r --filter "!infra" test
 
   terraform:
     runs-on: ubuntu-latest

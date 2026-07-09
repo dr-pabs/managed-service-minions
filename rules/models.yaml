@@ -1,4 +1,4 @@
-# Model tier routing for the Goose Agent Framework.
+# Model tier routing for the Minions Agent Framework.
 #
 # Tier names are stable; the model behind each tier is operator configuration.
 # Set deployment and provider to whatever is current in your environment.

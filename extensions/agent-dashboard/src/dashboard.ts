@@ -16,7 +16,7 @@ const DASHBOARD_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Goose Agent Dashboard</title>
+<title>Minions Agent Dashboard</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
@@ -70,7 +70,7 @@ main{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 56px
 <body>
 <header>
   <div class="status-dot" id="healthDot"></div>
-  <h1>Goose Agent Dashboard</h1>
+  <h1>Minions Agent Dashboard</h1>
   <div class="token-auth">
     <input type="password" id="authTokenInput" placeholder="Bearer token (if required)">
     <span style="font-size:.7rem;color:#64748b" id="refreshLabel"></span>
@@ -372,9 +372,14 @@ function unauthorized(res: http.ServerResponse): void {
  *
  * The `/api/events` SSE route additionally accepts the token as a `?token=`
  * query param, because the browser's `EventSource` API cannot set custom
- * request headers — this is the one route where a query-string credential is
- * necessary, not a general auth bypass (every other route only checks the
- * header).
+ * request headers — this is the ONLY route where a query-string credential is
+ * accepted (Milestone 18, carried-forward Milestone 14 review finding:
+ * previously `?token=` was accepted on every route whenever the bearer
+ * header was absent, which put the shared secret into ordinary API access
+ * logs and browser history for routes that don't need it; not a hole today
+ * since a wrong value still 401s, but needless exposure). Every other route
+ * requires the header — a valid `?token=` value on a non-events route is
+ * rejected, not merely a missing one.
  */
 function isDashboardAuthorized(req: http.IncomingMessage, authToken: string | undefined): boolean {
   if (!authToken) {
@@ -388,6 +393,9 @@ function isDashboardAuthorized(req: http.IncomingMessage, authToken: string | un
     return true;
   }
   const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.pathname !== '/api/events') {
+    return false;
+  }
   const queryToken = url.searchParams.get('token');
   return queryToken !== null && queryToken === authToken;
 }

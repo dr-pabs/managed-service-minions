@@ -1,8 +1,8 @@
 {
-  "name": "@goose-agent-framework/mcp-azure-devops",
+  "name": "@minions-agent-framework/mcp-azure-devops",
   "version": "0.1.0",
   "type": "module",
-  "description": "Azure DevOps MCP server extension for the Goose Agent Framework.",
+  "description": "Azure DevOps MCP server extension for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

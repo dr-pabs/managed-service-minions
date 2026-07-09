@@ -1,6 +1,6 @@
 # Disaster Recovery Runbook
 
-> **Scope:** Operational steps for restoring Goose Agent Framework v1 services after failures.  
+> **Scope:** Operational steps for restoring Minions Agent Framework v1 services after failures.  
 > **Audience:** On-call engineer or platform operator.  
 > **Prerequisites:** Azure CLI (`az`), `kubectl` (if inspecting Container Apps), `sqlite3`, access to the production resource group and Key Vault.
 

@@ -51,18 +51,19 @@
 |---|---|---|---|
 | Orchestrator | KEDA Service Bus | Queue depth > 3 messages | +1 replica |
 | Orchestrator | KEDA Service Bus | Queue depth = 0 for 15 min | Scale to 1 (or 0 outside business hours) |
-| Bots | KEDA HTTP | Requests > 10/min | +1 replica (rarely needed) |
+| Bots | N/A — pinned single replica | N/A | `max_replicas = 1` always; no scaler configured (ADR-025) |
 | MCP Sidecars | Colocated | Same as orchestrator | Inherits orchestrator scaling |
+
+> **Correction (2026-07-09, Milestone 18 hygiene sweep):** this table previously read "Bots | KEDA HTTP | Requests > 10/min | +1 replica (rarely needed)," implying the Slack/Teams bots autoscale on HTTP request volume. That never matched `infra/terraform/modules/container_apps/main.tf`, which pins both bots to `min_replicas = 1` / `max_replicas = 1` with no KEDA HTTP scale rule defined for them — and per `adrs/adr-025-single-replica-governance-state.md`, this is intentional, not an oversight: the bots share the toolshed's process-local governance-adjacent state assumptions (session/thread bookkeeping, the same mounted SQLite file) and are not part of the orchestrator's tested KEDA/Service-Bus scaling story. See ADR-025 for the trigger condition that would justify revisiting this.
 
 **Why consumption-only (not Dedicated):**
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryTextColor': '#1a1a1a'}}}%%
 flowchart LR
-    subgraph "Scaling Triggers"
+    subgraph "Scaling Triggers (orchestrator only)"
         q_depth["Service Bus\nQueue Depth > 3"]
         q_empty["Queue Depth = 0\nfor 15 min"]
-        http_req["HTTP Requests\n> 10/min"]
         off_hours["Outside\nBusiness Hours"]
     end
     
@@ -72,19 +73,18 @@ flowchart LR
     
     subgraph "Container Apps"
         orch["Orchestrator\n1 ⇄ 5 replicas"]
-        bots["Bots\n1 replica (always warm)"]
+        bots["Bots, toolshed, dashboard\nmax_replicas = 1, no scaler (ADR-025)"]
     end
     
     q_depth -->|"scale out"| keda
     q_empty -->|"scale in"| keda
-    http_req -->|"scale out"| keda
     off_hours -->|"scale to zero"| keda
     keda --> orch
-    keda --> bots
     
     style q_depth fill:#fadbd8,stroke:#e6a8a0,color:#1a1a1a
     style q_empty fill:#d6eaf8,stroke:#7fb3d8,color:#1a1a1a
     style keda fill:#d5f5e3,stroke:#82c091,color:#1a1a1a
+    style bots fill:#eeeeee,stroke:#999999,color:#1a1a1a
 ```
 - Dedicated plan minimum: ~$150/month for always-warm workers
 - Consumption plan: pay per-second for active containers, scale-to-zero
@@ -449,23 +449,27 @@ graph TB
 
 ### Horizontal Scaling
 
+> **Correction (2026-07-09, Milestone 18 hygiene sweep):** the diagram below previously showed a symmetric KEDA HTTP scaler for the bots (mirroring the orchestrator's Service Bus scaler, "Requests > 10/min → +1 replica"). That capability does not exist in Terraform and was never built — see `adrs/adr-025-single-replica-governance-state.md`. Only the orchestrator scales horizontally today; the Slack/Teams bots, the toolshed, and the dashboard are all pinned to `max_replicas = 1` in `infra/terraform/modules/container_apps/main.tf` because their governance-adjacent state (rate limiter buckets, circuit breakers, session bookkeeping, the mounted SQLite file) is process-local with no cross-replica coordination.
+
 ```
                      KEDA Scaler
                          │
-              ┌──────────┴──────────┐
-              │                     │
-    Service Bus Queue        HTTP Requests
-    (orchestrator)           (bots)
-              │                     │
-              ▼                     ▼
-    Queue depth > 3     Requests > 10/min
-    → +1 replica        → +1 replica
-              │                     │
-              ▼                     ▼
-    Queue depth = 0     Requests < 1/min
-    for 15 min →        for 10 min →
-    scale to 1          scale to 1
-    (or 0 off-hours)    (or 0 off-hours)
+                         ▼
+              Service Bus Queue
+              (orchestrator ONLY)
+                         │
+                         ▼
+              Queue depth > 3
+              → +1 replica
+                         │
+                         ▼
+              Queue depth = 0
+              for 15 min →
+              scale to 1
+              (or 0 off-hours)
+
+    Bots, toolshed, dashboard: no scaler.
+    max_replicas = 1 always (ADR-025).
 ```
 
 ### Vertical Scaling

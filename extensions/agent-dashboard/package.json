@@ -2,7 +2,7 @@
   "name": "agent-dashboard",
   "version": "0.1.0",
   "type": "module",
-  "description": "Dashboard backend MCP server for the Goose Agent Framework.",
+  "description": "Dashboard backend MCP server for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

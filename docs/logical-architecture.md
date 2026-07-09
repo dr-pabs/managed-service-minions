@@ -1,4 +1,4 @@
-# Goose Agent Framework — Logical Architecture
+# Minions Agent Framework — Logical Architecture
 
 > **Date:** 2026-06-05  
 > **Status:** Draft  
@@ -27,11 +27,11 @@
 
 ```mermaid
 C4Context
-    title System Context — Goose Agent Framework
+    title System Context — Minions Agent Framework
 
     Person(user, "Developer / Ops", "Interacts via chat or schedule")
     
-    System(goose, "Goose Agent Framework", "Multi-agent orchestration — decomposes tasks, dispatches minions, synthesizes results")
+    System(goose, "Minions Agent Framework", "Multi-agent orchestration — decomposes tasks, dispatches minions, synthesizes results")
     
     System_Ext(chat, "Chat Platforms", "Slack & Microsoft Teams")
     System_Ext(scm, "Source Control", "GitHub & Azure DevOps")
@@ -49,7 +49,7 @@ C4Context
     UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
 ```
 
-This is the broadest view — the **C4 System Context diagram**. It defines what is inside the Goose Agent Framework boundary and what sits outside as an external system or person.
+This is the broadest view — the **C4 System Context diagram**. It defines what is inside the Minions Agent Framework boundary and what sits outside as an external system or person.
 
 - **The user** (developer or operator) never interacts with Goose directly. All communication flows through chat platforms (Slack, Microsoft Teams) or scheduled cron triggers.
 - **Goose** is the central system. It receives intents, decomposes them into tasks, spins up minions, and returns synthesized results. It does not store tickets or source code — it orchestrates across systems that do.
@@ -63,7 +63,7 @@ This diagram answers: *"What does the framework touch, and what touches it?"*
 ## Container Architecture
 
 ```mermaid
-    title Container Diagram — Goose Agent Framework
+    title Container Diagram — Minions Agent Framework
 
     Person(user, "User", "Developer or Operator")
 

@@ -12,7 +12,7 @@ resource "azapi_resource" "hub" {
   body = {
     properties = {
       friendlyName = var.hub_name
-      description  = "AI Foundry Hub for Goose Agent Framework"
+      description  = "AI Foundry Hub for Minions Agent Framework"
       hbiWorkspace = false
       hubConfig = {
         defaultWorkspaceResourceGroup = data.azurerm_resource_group.main.id
@@ -32,7 +32,7 @@ resource "azapi_resource" "project" {
   body = {
     properties = {
       friendlyName  = var.project_name
-      description   = "AI Foundry Project for Goose Agent Framework"
+      description   = "AI Foundry Project for Minions Agent Framework"
       hubResourceId = azapi_resource.hub.id
     }
     kind = "Project"

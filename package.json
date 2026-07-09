@@ -1,10 +1,10 @@
 {
-  "name": "goose-agent-framework",
+  "name": "minions-agent-framework",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Multi-agent orchestration framework for engineering operations.",
-  "repository": "https://github.com/your-org/goose-agent-framework",
+  "description": "Minions Agent Framework: multi-agent orchestration for engineering operations.",
+  "repository": "https://github.com/dr-pabs/managed-service-minions",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "tsc --noEmit -p tsconfig.json",

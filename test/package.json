@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Test harness for the Goose Agent Framework.",
+  "description": "Test harness for the Minions Agent Framework.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage",
     "test:integration": "NODE_OPTIONS='--experimental-vm-modules' jest --config jest.config.js --testPathPattern integration",
     "test:e2e": "NODE_OPTIONS='--experimental-vm-modules' jest --config jest.config.js --testPathPattern e2e"
   },

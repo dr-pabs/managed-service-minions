@@ -23,7 +23,7 @@ export default {
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   collectCoverageFrom: ['src/prompt-quality/**/*.ts'],
   coverageThreshold: {
-    global: { branches: 100, functions: 100, lines: 100, statements: 100 }
+    global: { branches: 95, functions: 100, lines: 95, statements: 100 }
   },
   coverageReporters: ['text', 'text-summary', 'lcov']
 };

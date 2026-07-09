@@ -1,6 +1,6 @@
 # Security Review Runbook
 
-> **Scope:** Preparation, checklist, and findings template for the Goose Agent Framework v1 security review.  
+> **Scope:** Preparation, checklist, and findings template for the Minions Agent Framework v1 security review.  
 > **Audience:** Security reviewer and engineering lead.
 
 ---

@@ -1,7 +1,7 @@
 # Skills & Roles — Development and Deployment
 
 > **Date:** 2026-06-06  
-> **Purpose:** Clarify who is needed at each phase to build and operate the Goose Agent Framework.
+> **Purpose:** Clarify who is needed at each phase to build and operate the Minions Agent Framework.
 
 ---
 

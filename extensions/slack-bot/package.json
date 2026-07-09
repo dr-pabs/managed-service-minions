@@ -2,7 +2,7 @@
   "name": "slack-bot",
   "version": "0.1.0",
   "type": "module",
-  "description": "Slack ingress/egress MCP server for the Goose Agent Framework.",
+  "description": "Slack ingress/egress MCP server for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -8,7 +8,7 @@
 
 ## The Self-Hosting Question
 
-The Goose Agent Framework designs, builds, deploys, tests, and operates itself. Every human role from the skills matrix is mapped to one or more specialized minions. The framework is its own first user.
+The Minions Agent Framework designs, builds, deploys, tests, and operates itself. Every human role from the skills matrix is mapped to one or more specialized minions. The framework is its own first user.
 
 This is recursive: the orchestrator spawns minions that improve the orchestrator.
 
@@ -159,7 +159,7 @@ Human gating:
 **System prompt flavor:**
 ```
 You are an Azure infrastructure engineer. You write and modify
-Bicep modules for the Goose Agent Framework.
+Bicep modules for the Minions Agent Framework.
 
 Rules:
 - NEVER use `az deployment group create` without the --confirm-with-what-if flag

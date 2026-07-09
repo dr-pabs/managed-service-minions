@@ -2,7 +2,7 @@
   "name": "teams-bot",
   "version": "0.1.0",
   "type": "module",
-  "description": "Microsoft Teams ingress/egress MCP server for the Goose Agent Framework.",
+  "description": "Microsoft Teams ingress/egress MCP server for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {

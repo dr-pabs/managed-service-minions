@@ -271,6 +271,16 @@ describe('dashboard approve/deny proxy (Milestone 14, toolshed-governance-invari
     expect(response.status).toBe(401);
   });
 
+  it('401s a VALID ?token= query param on a non-events route (M18: query-param fallback is /api/events-only, not a general auth bypass)', async () => {
+    const response = await request(
+      server.port,
+      'GET',
+      `/api/approvals/pending?token=${encodeURIComponent(DASHBOARD_TOKEN)}`
+    );
+    expect(response.status).toBe(401);
+    expect(fakeOperator.calls).toHaveLength(0);
+  });
+
   it('rejects an approve/deny call whose body is a non-object, hitting the {} JSON-body fallback the same as an empty body', async () => {
     const response = await new Promise<Response>((resolve, reject) => {
       const req = http.request(

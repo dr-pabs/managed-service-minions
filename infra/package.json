@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Terraform Azure infrastructure for the Goose Agent Framework.",
+  "description": "Terraform Azure infrastructure for the Minions Agent Framework.",
   "scripts": {
     "build": "echo 'No TypeScript build for infra'",
     "fmt": "cd terraform && terraform fmt -recursive",

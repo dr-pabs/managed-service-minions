@@ -371,4 +371,19 @@ describe('GET /api/events (Milestone 14 SSE live updates)', () => {
       await server.close();
     }
   });
+
+  it('accepts a valid ?token= query param on /api/events (M18: the one route EventSource cannot attach headers to)', async () => {
+    store = createMemoryStore();
+    const server = await startDashboardServer(store, 0, undefined, [], undefined, { authToken: 'secret' });
+    try {
+      const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const req = http.get(`http://localhost:${server.port}/api/events?token=secret`, resolve);
+        req.on('error', reject);
+      });
+      expect(response.statusCode).toBe(200);
+      response.destroy();
+    } finally {
+      await server.close();
+    }
+  });
 });

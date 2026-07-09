@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/dr-pabs/managed-service-minions/actions/workflows/ci.yml/badge.svg)](https://github.com/dr-pabs/managed-service-minions/actions/workflows/ci.yml)
 
-> **Status:** v1 build complete. All TypeScript packages pass typecheck, build, lint, and tests with 100% coverage. Operational runbooks and DR/test scaffolding are in `docs/runbooks/`, `test/performance/`, and `test/chaos/`.
+> **Status:** the 2026-07-08 remediation ExecPlan (18 milestones) is complete — see the Roadmap below. All TypeScript packages pass typecheck, build, lint, and tests, gated in CI at 95% branch/line and 100% function/statement coverage per package (`adrs/adr-023-100-percent-test-coverage-gate.md`'s 2026-07-09 amendment). Operational runbooks and DR/test scaffolding are in `docs/runbooks/`, `test/performance/`, and `test/chaos/`.
 
 ---
 
@@ -16,7 +16,7 @@
 - [Repository layout](#repository-layout)
 - [Getting started](#getting-started)
 - [Development workflow](#development-workflow)
-- [Running locally with Minions](#running-locally-with-goose)
+- [Running locally with Minions](#running-locally-with-minions)
 - [Testing](#testing)
 - [Deployment](#deployment)
 - [Security & governance](#security--governance)
@@ -28,7 +28,7 @@
 
 ## What is this?
 
-The Goose Agent Framework extends the [Goose](https://goose-docs.ai/) agent runtime into a production-ready, multi-agent system for software engineering teams. It combines:
+The Minions Agent Framework extends the [Goose](https://goose-docs.ai/) agent runtime into a production-ready, multi-agent system for software engineering teams. It combines:
 
 1. A **Goose plugin** that provides the orchestrator agent, minion prompts, skills, recipes, and governance rules.
 2. A set of **MCP extensions** that wrap external systems — GitHub, Azure DevOps, ServiceNow, Jira, Slack, Teams, and the filesystem — behind a governed toolshed.
@@ -161,7 +161,7 @@ pnpm lint
 pnpm test --coverage
 ```
 
-Expected result: all green, with 100% line/branch/function/statement coverage for `packages/framework-core/` and every `extensions/*/src/` directory.
+Expected result: all green, with each package meeting its `jest.config.js` coverage thresholds (95% branches/lines, 100% functions/statements) for `packages/framework-core/` and every `extensions/*/src/` directory — see `adrs/adr-023-100-percent-test-coverage-gate.md` and its 2026-07-09 amendment for why branches/lines were lowered from 100%.
 
 ---
 
@@ -187,14 +187,14 @@ pnpm --filter mcp-toolshed test --coverage
 
 ### Quality gates
 
-- **100% coverage** is enforced for every package that contains source code. No PR may lower coverage.
+- **95% branch/line, 100% function/statement coverage** is enforced for every package that contains source code (lowered from a strict 100% across all four metrics on 2026-07-09 — see the ADR amendment below for why). No PR may lower a package's coverage below its configured threshold.
 - **Red-build policy ("Ralph Wiggum" loop):** any failing typecheck, lint, test, or coverage gate blocks merge. The author must fix the root cause, re-run the full pipeline green, and obtain maintainer/QA approval.
 
 See [`adrs/adr-023-100-percent-test-coverage-gate.md`](./adrs/adr-023-100-percent-test-coverage-gate.md) and [`adrs/adr-024-red-build-policy-ralph-wiggum-loop.md`](./adrs/adr-024-red-build-policy-ralph-wiggum-loop.md).
 
 ---
 
-## Running locally with Goose
+## Running locally with Minions
 
 ### 1. Install the plugin
 
@@ -262,7 +262,7 @@ goose recipe list
 
 | Layer | Command | Notes |
 |---|---|---|
-| Unit | `pnpm test --coverage` | 100% thresholds on `packages/` and `extensions/` |
+| Unit | `pnpm test --coverage` | 95% branch/line, 100% function/statement thresholds on `packages/` and `extensions/` |
 | Integration | `pnpm test:integration` | Mock MCP servers and SQLite-backed flows |
 | E2E | `pnpm test:e2e` | Staging-environment smoke tests |
 | Prompt quality | `pnpm test:prompts -- --minion <name> ...` | Compare candidate prompts against baselines |
@@ -317,16 +317,25 @@ See [`adrs/adr-005-tool-allowlisting-per-minion.md`](./adrs/adr-005-tool-allowli
 
 ## Roadmap
 
-The implementation plan is in [`docs/execplan/execution-plan.md`](./docs/execplan/execution-plan.md).
+The original v1 build plan is in [`docs/execplan/execution-plan.md`](./docs/execplan/execution-plan.md) (superseded — see below). The authoritative, up-to-date plan is the remediation ExecPlan, [`docs/execplan/2026-07-08-minions-remediation-and-features.md`](./docs/execplan/2026-07-08-minions-remediation-and-features.md), which fixed the Critical/High/Medium findings from the 2026-07-08 code review and delivered the feature set below across 19 milestones (0–18), all complete as of this writing.
 
 | Milestone | Status | Description |
 |---|---|---|
-| **Milestone 0** | ✅ Complete | Bootstrap plugin + MCP monorepo, build/test/lint pipeline, 100% coverage gates |
-| **Milestone 1** | ✅ Complete | MCP toolshed wiring, agent prompts, SQLite session store, first end-to-end minion dispatch |
-| **Milestone 2** | ✅ Complete | Orchestrator skill, DAG decomposition, structured output schemas, prompt-quality harness |
-| **Milestone 3** | ✅ Complete | GitHub/ADO/ServiceNow/Jira pipelines; ticket→fix→PR; approval gating |
-| **Milestone 4** | ✅ Complete | Azure infrastructure, Container Apps, Service Bus, observability, dashboard, CI/CD |
-| **Milestone 5** | ✅ Build artifacts complete | Integration/E2E/acceptance tests, DR/handoff/security runbooks, performance/chaos scaffolding; staging validation and formal sign-off remain for production handoff |
+| **Milestones 0–6** | ✅ Complete | Workspace bootstrap; config integrity (minion naming fix); TTL/bounded tool-call cache; minion identity tokens (no self-reported identity); path-scope + shell-command governance hardening; async-first approval with Slack/Teams notification; per-server rate limits and durable circuit breakers |
+| **Milestone 7** | ✅ Complete | Single-replica governance state made honest in Terraform and docs (`adrs/adr-025-single-replica-governance-state.md`) — toolshed/bots/dashboard pinned to `max_replicas = 1`; only the orchestrator scales (1–5, KEDA on Service Bus queue depth) |
+| **Milestone 8** | ✅ Complete | Cloud audit trail hardening: durable retry, secret redaction |
+| **Milestone 9** | ✅ Complete | Session lifecycle: Slack thread/channel disambiguation, `updatedAt`, expiry |
+| **Milestone 10** | ✅ Complete | Runtime output-contract enforcement (JSON Schema validation, one governed retry) |
+| **Milestone 11** | ✅ Complete | Real orchestrator runner wired end-to-end: intent classification, minion DAG execution, Goose contract test, `test/src/e2e-review-pr.test.ts` |
+| **Milestone 12** | ✅ Complete | Shared REST client retry/backoff/pagination (`packages/framework-core/src/http-retry.ts`) across all four MCP clients |
+| **Milestone 13** | ✅ Complete | OpenTelemetry spans/metrics (no-op when unconfigured) and per-session token/cost accounting |
+| **Milestone 14** | ✅ Complete | Dashboard v2: bearer-token auth, SSE live updates, pending-approvals panel, audit search, cost view; Entra ID easy-auth documented for production in Terraform |
+| **Milestone 15** | ✅ Complete | Webhook ingress (`extensions/webhook-ingress`): GitHub/ADO events drive the same orchestrator runner as chat mentions |
+| **Milestone 16** | ✅ Complete | Prompt-injection quarantine: untrusted content fenced before reaching a model, verified via an injection e2e test |
+| **Milestone 17** | ✅ Complete | Rules hot-reload behind `TOOLSHED_WATCH_RULES=1`, validated before swap |
+| **Milestone 18** | ✅ Complete | Hygiene sweep: honest CI coverage gate, naming consistency, scaffolding cleanup, dashboard `?token=` scoped to `/api/events` only, this table |
+
+See the remediation ExecPlan's `Progress`, `Decision Log`, and `Outcomes & Retrospective` sections for the full history, evidence, and rationale behind every milestone above.
 
 ---
 
@@ -335,7 +344,7 @@ The implementation plan is in [`docs/execplan/execution-plan.md`](./docs/execpla
 1. Open an issue or discussion before large changes.
 2. Keep changes aligned with the ADRs and design docs.
 3. Follow the monorepo scripts: `pnpm typecheck`, `pnpm build`, `pnpm lint`, `pnpm test --coverage`.
-4. Maintain 100% coverage for any new TypeScript source.
+4. Maintain each package's configured coverage threshold (95% branches/lines, 100% functions/statements) for any new TypeScript source.
 5. Get maintainer/QA approval after any red-build fix.
 
 See [`AGENTS.md`](./AGENTS.md) for agent-focused conventions.

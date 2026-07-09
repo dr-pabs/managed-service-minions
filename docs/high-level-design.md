@@ -1,4 +1,4 @@
-# Goose Agent Framework — High-Level Design
+# Minions Agent Framework — High-Level Design
 
 > **Status:** Revised Draft  
 > **Date:** 2026-06-05  
@@ -30,7 +30,7 @@
 
 ## Overview
 
-The Goose Agent Framework extends the core Goose platform into a **multi-agent orchestration system** where specialized sub-agents ("minions") collaborate to perform complex tasks across large codebases. The system ingests work from chat platforms (Slack, Microsoft Teams), ticket systems (ServiceNow, Jira, Azure DevOps), and scheduled triggers, then decomposes, delegates, and synthesizes results back to the user.
+The Minions Agent Framework extends the core Goose platform into a **multi-agent orchestration system** where specialized sub-agents ("minions") collaborate to perform complex tasks across large codebases. The system ingests work from chat platforms (Slack, Microsoft Teams), ticket systems (ServiceNow, Jira, Azure DevOps), and scheduled triggers, then decomposes, delegates, and synthesizes results back to the user.
 
 ### Capabilities
 
@@ -483,7 +483,7 @@ The storage strategy uses **three purpose-built stores**, rejecting the expensiv
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                  Goose Agent Framework                    │
+│                  Minions Agent Framework                  │
 │                                                           │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐  │
 │  │  Session     │   │  Tool Call   │   │  Minion      │  │
@@ -794,10 +794,10 @@ GitHub serves multiple roles in the framework, not just as an integration target
 
 ### a) Framework Source of Truth (Primary)
 
-The Goose agent framework itself lives in GitHub:
+The Minions Agent Framework itself lives in GitHub:
 
 ```
-github.com/your-org/goose-agent-framework/
+github.com/dr-pabs/managed-service-minions/
 ├── extensions/
 │   ├── orchestrator/
 │   │   ├── extension.yaml
