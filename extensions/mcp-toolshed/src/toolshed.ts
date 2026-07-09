@@ -528,13 +528,20 @@ async function doExecuteToolPipeline(
   if (!toolshedState.governanceState.canExecuteBreaker(breakerKey)) {
     // Breaker-state gauge (Milestone 13, M9/F9): observe-only, recorded
     // alongside the pre-existing open-breaker decision, never influencing
-    // it.
-    recordBreakerState(breakerKey, true);
-    return emit({
+    // it. Ordering (M13 review hardening finding): `emit()` — which writes
+    // the audit entry FIRST, before its own telemetry calls — runs before
+    // this metric, not after, so the durable audit trail is guaranteed
+    // written even if this call were somehow to throw (it also can't, since
+    // `recordBreakerState` is itself failure-isolated — see
+    // `telemetry-metrics.ts`'s `safeEmit`; this ordering is the second,
+    // structural half of the same guarantee, independent of that helper).
+    const result = emit({
       status: 'throttled',
       error: 'Circuit breaker is open',
       retryAfterSeconds: toolshedState.governanceState.breakerRetryAfterSeconds(breakerKey),
     });
+    recordBreakerState(breakerKey, true);
+    return result;
   }
 
   if (isDestructive(toolshedState.governance, serverAlias, toolName, paramsRecord)) {

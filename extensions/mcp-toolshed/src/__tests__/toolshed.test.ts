@@ -1,5 +1,7 @@
 import { jest } from '@jest/globals';
 import { mintMinionToken } from 'framework-core';
+import { metrics } from '@opentelemetry/api';
+import type { Counter, Histogram, Meter, MeterProvider, UpDownCounter, MetricOptions, Attributes } from '@opentelemetry/api';
 import {
   executeTool,
   verifyAndExecuteTool,
@@ -14,8 +16,38 @@ import { createMemoryStore } from '../store.js';
 import { createMockAdapter } from '../adapter.js';
 import { TokenBucketRateLimiter } from '../rate-limiter.js';
 import { loadAllowlists, loadGovernance } from '../config.js';
+import { resetTelemetryMetricsForTests, resetBreakerStateForTests } from '../telemetry-metrics.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * A `MeterProvider` whose every instrument's `add`/`record` throws — used to
+ * prove that a hostile/broken OTel meter can never break enforcement (M13
+ * review hardening finding). Installed via `metrics.setGlobalMeterProvider`,
+ * which is exactly what `getMeter()` (framework-core) and this module's
+ * `instruments()` read from underneath the toolshed's telemetry calls.
+ */
+function installThrowingMeterProvider(): void {
+  const throwingInstrument = {
+    add: () => {
+      throw new Error('injected meter failure: add()');
+    },
+    record: () => {
+      throw new Error('injected meter failure: record()');
+    },
+  };
+  const meter: Pick<Meter, 'createCounter' | 'createHistogram' | 'createUpDownCounter'> = {
+    createCounter: (_name: string, _options?: MetricOptions): Counter<Attributes> => throwingInstrument as unknown as Counter<Attributes>,
+    createHistogram: (_name: string, _options?: MetricOptions): Histogram<Attributes> => throwingInstrument as unknown as Histogram<Attributes>,
+    createUpDownCounter: (_name: string, _options?: MetricOptions): UpDownCounter<Attributes> => throwingInstrument as unknown as UpDownCounter<Attributes>,
+  };
+  const provider: MeterProvider = {
+    getMeter: () => meter as Meter,
+  };
+  metrics.setGlobalMeterProvider(provider);
+  resetTelemetryMetricsForTests();
+  resetBreakerStateForTests();
+}
 
 const SECRET = 'test-signing-secret';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -266,6 +298,104 @@ describe('executeTool', () => {
     const result = await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
     expect(result.status).toBe('throttled');
     expect(result.error).toBe('Circuit breaker is open');
+  });
+
+  describe('telemetry emission cannot break enforcement (M13 review hardening finding)', () => {
+    afterEach(() => {
+      metrics.disable();
+      resetTelemetryMetricsForTests();
+      resetBreakerStateForTests();
+    });
+
+    it('a throwing meter does not change the returned status, still writes the audit entry, and does not throw out of executeTool on a plain success path', async () => {
+      installThrowingMeterProvider();
+      const store = createMemoryStore();
+      const createAuditEntrySpy = jest.spyOn(store, 'createAuditEntry');
+      initializeToolshed(
+        createDefaultToolshedState({
+          store,
+          adapters: new Map([['filesystem', createMockAdapter('filesystem', { callTool: async () => ({ ok: true }) })]]),
+          allowlists: {
+            allowlists: { code_explorer: { filesystem: ['read_file'] } },
+            pathScopes: {},
+            shellCommands: {},
+          },
+        })
+      );
+
+      const result = await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
+
+      expect(result.status).toBe('success');
+      expect(createAuditEntrySpy).toHaveBeenCalledTimes(1);
+      expect(createAuditEntrySpy.mock.calls[0][0]).toMatchObject({ status: 'success', serverAlias: 'filesystem', toolName: 'read_file' });
+    });
+
+    it('a throwing meter does not change the returned status or drop the audit entry on the circuit-breaker-open path (recordBreakerState precedes emit)', async () => {
+      installThrowingMeterProvider();
+      const failingAdapter = createMockAdapter('filesystem', {
+        callTool: async () => {
+          throw new Error('downstream unavailable');
+        },
+      });
+      const store = createMemoryStore();
+      initializeToolshed(
+        createDefaultToolshedState({
+          store,
+          adapters: new Map([['filesystem', failingAdapter]]),
+          allowlists: {
+            allowlists: { code_explorer: { filesystem: ['read_file'] } },
+            pathScopes: {},
+            shellCommands: {},
+          },
+          circuitBreakerConfig: {
+            failureThreshold: 1,
+            successThreshold: 1,
+            timeoutSecs: 60,
+            halfOpenMaxRequests: 1,
+          },
+        })
+      );
+
+      // First call trips the breaker (recordBreakerFailure); the SECOND call
+      // is the one that hits the pre-emit `recordBreakerState(breakerKey,
+      // true)` call site at ~toolshed.ts:532, exactly the ordering the M13
+      // review flagged — this must not prevent the audit entry from being
+      // written or the correct 'throttled' status from being returned.
+      await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
+      const result = await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
+
+      expect(result.status).toBe('throttled');
+      expect(result.error).toBe('Circuit breaker is open');
+      // listAuditEntries() sorts by timestamp (newest first, see store.ts),
+      // which is millisecond-resolution — two calls this close together can
+      // tie, so which index holds which entry is not deterministic. Assert
+      // on the SET of statuses instead of a specific index.
+      const entries = store.listAuditEntries();
+      expect(entries).toHaveLength(2);
+      expect(entries.map((e) => e.status).sort()).toEqual(['error', 'throttled']);
+    });
+
+    it('a throwing meter does not change the returned status or drop the audit entry on a successful adapter call that closes the breaker (recordBreakerState after recordBreakerSuccess)', async () => {
+      installThrowingMeterProvider();
+      const store = createMemoryStore();
+      initializeToolshed(
+        createDefaultToolshedState({
+          store,
+          adapters: new Map([['filesystem', createMockAdapter('filesystem', { callTool: async () => ({ ok: true }) })]]),
+          allowlists: {
+            allowlists: { code_explorer: { filesystem: ['read_file'] } },
+            pathScopes: {},
+            shellCommands: {},
+          },
+        })
+      );
+
+      const result = await executeTool(baseCtx, 'filesystem', 'read_file', { path: '/repo/readme.md' });
+
+      expect(result.status).toBe('success');
+      expect(store.listAuditEntries()).toHaveLength(1);
+      expect(store.listAuditEntries()[0].status).toBe('success');
+    });
   });
 
   describe('shell command governance (H2/F5: enforced before the path scope check)', () => {

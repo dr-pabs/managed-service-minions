@@ -72,39 +72,64 @@ export interface GovernanceMetricAttributes {
   minionType: string;
 }
 
+/**
+ * Failure-isolation boundary (M13 review hardening finding): every exported
+ * `record*` function in this module runs through this wrapper so a throwing
+ * meter/instrument (a hostile or misbehaving OTel `MeterProvider`, a broken
+ * exporter, anything) can NEVER propagate into `executeTool`'s enforcement
+ * pipeline. Per `toolshed-governance-invariants`, telemetry must be
+ * structurally incapable of breaking enforcement or dropping an audit entry
+ * — this must not depend on OTel's own instruments happening not to throw.
+ * Swallow-and-ignore is deliberate: a lost metric point is an acceptable
+ * loss, a lost audit entry or an aborted tool call is not.
+ */
+function safeEmit(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    // Intentionally swallowed. See doc comment above.
+  }
+}
+
 /** Increments the governance-outcome counter. Called from `executeTool`'s decision points, in addition to (never instead of) the existing `emit()` audit call. */
 export function recordGovernanceOutcome(outcome: GovernanceOutcome, attrs: GovernanceMetricAttributes): void {
-  instruments().governanceOutcomeCounter.add(1, {
-    outcome,
-    server_alias: attrs.serverAlias,
-    tool_name: attrs.toolName,
-    minion_type: attrs.minionType,
+  safeEmit(() => {
+    instruments().governanceOutcomeCounter.add(1, {
+      outcome,
+      server_alias: attrs.serverAlias,
+      tool_name: attrs.toolName,
+      minion_type: attrs.minionType,
+    });
   });
 }
 
 /** Records one `execute_tool` call's latency against the histogram. */
 export function recordToolLatency(latencyMs: number, attrs: GovernanceMetricAttributes): void {
-  instruments().toolLatencyHistogram.record(latencyMs, {
-    server_alias: attrs.serverAlias,
-    tool_name: attrs.toolName,
-    minion_type: attrs.minionType,
+  safeEmit(() => {
+    instruments().toolLatencyHistogram.record(latencyMs, {
+      server_alias: attrs.serverAlias,
+      tool_name: attrs.toolName,
+      minion_type: attrs.minionType,
+    });
   });
 }
 
 /** Sets the breaker-state gauge for one server alias: `open=true` reports 1, `open=false` reports 0 (implemented via an UpDownCounter's signed delta, tracking the last-reported state per key so repeated calls with the same state are idempotent, not cumulative). */
 const lastBreakerState = new Map<string, boolean>();
 export function recordBreakerState(serverAlias: string, open: boolean): void {
-  const previous = lastBreakerState.get(serverAlias);
-  if (previous === open) return;
-  const delta = open ? 1 : -1;
-  // First observation of a CLOSED breaker needs no delta (gauge starts at
-  // 0); only report a delta when the value actually needs to move by 1.
-  if (previous === undefined && !open) {
+  safeEmit(() => {
+    const previous = lastBreakerState.get(serverAlias);
+    if (previous === open) return;
+    const delta = open ? 1 : -1;
+    // First observation of a CLOSED breaker needs no delta (gauge starts at
+    // 0); only report a delta when the value actually needs to move by 1.
+    if (previous === undefined && !open) {
+      lastBreakerState.set(serverAlias, open);
+      return;
+    }
+    instruments().breakerStateGauge.add(delta, { server_alias: serverAlias });
     lastBreakerState.set(serverAlias, open);
-    return;
-  }
-  instruments().breakerStateGauge.add(delta, { server_alias: serverAlias });
-  lastBreakerState.set(serverAlias, open);
+  });
 }
 
 /** Test-only: clears the breaker-state idempotency cache alongside {@link resetTelemetryMetricsForTests}. */
