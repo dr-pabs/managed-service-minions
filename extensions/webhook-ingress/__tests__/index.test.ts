@@ -32,6 +32,7 @@ describe('webhook-ingress index (Milestone 15, F11)', () => {
   const originalEnv = process.env;
   let exitSpy: jest.SpiedFunction<typeof process.exit>;
   let errorSpy: jest.SpiedFunction<typeof console.error>;
+  let warnSpy: jest.SpiedFunction<typeof console.warn>;
 
   beforeEach(() => {
     jest.resetModules();
@@ -46,6 +47,7 @@ describe('webhook-ingress index (Milestone 15, F11)', () => {
     delete process.env.TOOLSHED_SIGNING_SECRET;
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     createSqliteStore.mockClear();
     buildToolshedState.mockClear().mockResolvedValue(mockToolshedState);
     initializeToolshed.mockClear();
@@ -58,6 +60,7 @@ describe('webhook-ingress index (Milestone 15, F11)', () => {
     process.env = originalEnv;
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it('builds the real in-process toolshed, the orchestrator runner, and starts the webhook server from env config', async () => {
@@ -92,6 +95,8 @@ describe('webhook-ingress index (Milestone 15, F11)', () => {
       toolshed: { verifyAndExecuteTool },
       signingSecret: 'the-secret',
     });
+    // Fully configured: no fail-closed startup warnings.
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('defaults PORT to 3100 and the Goose URL to localhost:3284 when unset', async () => {
@@ -100,6 +105,15 @@ describe('webhook-ingress index (Milestone 15, F11)', () => {
 
     expect(createHttpGooseClient).toHaveBeenCalledWith({ baseUrl: 'http://localhost:3284' });
     expect(createWebhookServer).toHaveBeenCalledWith(expect.objectContaining({ port: 3100 }));
+  });
+
+  it('logs a loud warning for each webhook route whose secret is unset (fail-closed, M15 review)', async () => {
+    // No GITHUB_WEBHOOK_SECRET / ADO creds in env (cleared in beforeEach).
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GITHUB_WEBHOOK_SECRET is not set'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ADO_WEBHOOK_USERNAME/ADO_WEBHOOK_PASSWORD is not set'));
   });
 
   it('exits when building the toolshed state rejects', async () => {

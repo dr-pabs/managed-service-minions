@@ -143,6 +143,21 @@ describe('webhook-ingress (Milestone 15, F11)', () => {
       expect(response.status).toBe(401);
       expect(runMock).not.toHaveBeenCalled();
     });
+
+    it('rejects ALL github webhooks when GITHUB_WEBHOOK_SECRET is empty, even a signature validly computed over the empty key (M3 N2 precedent: fail closed, not HMAC-over-empty-key)', async () => {
+      // An attacker who knows the secret is unset can compute a real
+      // HMAC-SHA256 over the empty key and forge a "valid" signature. This
+      // must be rejected outright, exactly as M3 rejects an empty toolshed
+      // signing secret rather than verifying tokens against ''.
+      await startServer({ githubWebhookSecret: '' });
+      const body = pullRequestOpenedPayload();
+      const response = await post(server.port, '/webhooks/github', body, {
+        'X-Hub-Signature-256': githubSignature('', body),
+        'X-GitHub-Event': 'pull_request',
+      });
+      expect(response.status).toBe(401);
+      expect(runMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /webhooks/github event mapping and dispatch', () => {
@@ -321,6 +336,26 @@ describe('webhook-ingress (Milestone 15, F11)', () => {
       expect(call.threadId).toBe('acme/widgets#42');
       expect(call.text).toContain('Add retry logic');
     });
+
+    it('rejects ALL ado webhooks when the configured username is empty, even matching empty credentials (fail closed, M3 N2 precedent)', async () => {
+      await startServer({ adoUsername: '', adoPassword: ADO_PASS });
+      const body = adoPullRequestPayload();
+      const response = await post(server.port, '/webhooks/ado', body, {
+        Authorization: basicAuthHeader('', ADO_PASS),
+      });
+      expect(response.status).toBe(401);
+      expect(runMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects ALL ado webhooks when the configured password is empty, even matching empty credentials (fail closed, M3 N2 precedent)', async () => {
+      await startServer({ adoUsername: ADO_USER, adoPassword: '' });
+      const body = adoPullRequestPayload();
+      const response = await post(server.port, '/webhooks/ado', body, {
+        Authorization: basicAuthHeader(ADO_USER, ''),
+      });
+      expect(response.status).toBe(401);
+      expect(runMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('governed toolshed reply (Milestone 15 hard requirement)', () => {
@@ -467,6 +502,22 @@ describe('webhook-ingress (Milestone 15, F11)', () => {
   describe('pure function edge cases (coverage for guard branches)', () => {
     it('verifyGitHubSignature rejects a header missing the sha256= prefix', () => {
       expect(verifyGitHubSignature('s', Buffer.from('x'), 'md5=abc')).toBe(false);
+    });
+
+    it('verifyGitHubSignature returns false for an empty secret even with a signature validly computed over the empty key', () => {
+      const body = Buffer.from('{"a":1}');
+      const sigOverEmptyKey = `sha256=${createHmac('sha256', '').update(body).digest('hex')}`;
+      expect(verifyGitHubSignature('', body, sigOverEmptyKey)).toBe(false);
+    });
+
+    it('verifyAdoBasicAuth returns false when the configured username is empty', () => {
+      const header = 'Basic ' + Buffer.from(':p').toString('base64');
+      expect(verifyAdoBasicAuth('', 'p', header)).toBe(false);
+    });
+
+    it('verifyAdoBasicAuth returns false when the configured password is empty', () => {
+      const header = 'Basic ' + Buffer.from('u:').toString('base64');
+      expect(verifyAdoBasicAuth('u', '', header)).toBe(false);
     });
 
     it('verifyAdoBasicAuth rejects a header not starting with "Basic "', () => {

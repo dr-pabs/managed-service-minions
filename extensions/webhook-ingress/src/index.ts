@@ -18,7 +18,35 @@ const config = {
 
 const store = createSqliteStore(process.env.SQLITE_PATH ?? ':memory:');
 
+/**
+ * Loud startup warnings when a webhook route's secret is unset -- the route
+ * stays wired but fails every request closed (401), so a partial config (only
+ * one of GitHub/ADO configured) still serves the configured route. Mirrors the
+ * toolshed's `TOOLSHED_ALLOW_UNSIGNED`/missing-`TOOLSHED_SIGNING_SECRET` and the
+ * dashboard's `DASHBOARD_AUTH_TOKEN` loud-warn-then-fail-closed pattern (M3 N2,
+ * M14). We start-but-reject-the-route rather than refusing to boot, so a
+ * GitHub-only or ADO-only deployment is not blocked by the other's missing
+ * secret. See the ExecPlan Decision Log (M15 review).
+ */
+function warnOnMissingWebhookSecrets(cfg: {
+  githubWebhookSecret: string;
+  adoUsername: string;
+  adoPassword: string;
+}): void {
+  if (!cfg.githubWebhookSecret) {
+    console.warn(
+      '[webhook-ingress] GITHUB_WEBHOOK_SECRET is not set -- the /webhooks/github route will REJECT every request (401). Set it to enable GitHub webhooks.'
+    );
+  }
+  if (!cfg.adoUsername || !cfg.adoPassword) {
+    console.warn(
+      '[webhook-ingress] ADO_WEBHOOK_USERNAME/ADO_WEBHOOK_PASSWORD is not set -- the /webhooks/ado route will REJECT every request (401). Set both to enable Azure DevOps webhooks.'
+    );
+  }
+}
+
 async function main(): Promise<void> {
+  warnOnMissingWebhookSecrets(config);
   const state = await buildToolshedState();
   initializeToolshed(state);
 

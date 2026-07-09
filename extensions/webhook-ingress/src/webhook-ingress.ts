@@ -76,6 +76,15 @@ function timingSafeEqualHex(expectedHex: string, actualHex: string): boolean {
  * failing against a real GitHub signature; see the ExecPlan Decision Log).
  */
 export function verifyGitHubSignature(secret: string, rawBody: Buffer, signatureHeader: string | undefined): boolean {
+  // Fail closed on an unset/empty secret rather than computing a real
+  // HMAC-SHA256 over the empty key -- an empty-key MAC is still a valid MAC,
+  // so an attacker who knows the secret is unset could forge a signature the
+  // comparison below would accept. This mirrors the Milestone 3 N2 decision
+  // (an empty toolshed signing secret rejects tokens outright; see the
+  // ExecPlan Decision Log's M3 correction).
+  if (!secret) {
+    return false;
+  }
   if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
     return false;
   }
@@ -91,6 +100,14 @@ export function verifyGitHubSignature(secret: string, rawBody: Buffer, signature
  * same as the GitHub path.
  */
 export function verifyAdoBasicAuth(username: string, password: string, authHeader: string | undefined): boolean {
+  // Fail closed on empty configured credentials (same M3 N2 precedent as the
+  // GitHub path). Making this an explicit early return -- rather than relying
+  // on the incidental `length > 0` guards in the comparison below -- states
+  // the intent and can never be weakened away by a later refactor of those
+  // guards.
+  if (!username || !password) {
+    return false;
+  }
   if (!authHeader || !authHeader.startsWith('Basic ')) {
     return false;
   }
