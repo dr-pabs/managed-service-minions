@@ -89,4 +89,41 @@ describe('createFakeGooseClient', () => {
 
     expect(JSON.parse(response.raw)).toEqual({ summary: 'ok', ticket_id: 'T1', title: 't', status: 'open' });
   });
+
+  it('records the exact systemPrompt/userContent it received for each runMinion and classifyIntent call (M16 review, F1)', async () => {
+    const { toolshed } = makeToolshed();
+    const goose = createFakeGooseClient({
+      toolshed,
+      secret: SECRET,
+      script: {
+        orchestrator: { output: { intent: 'code_review', complexity: 'simple', platform: 'slack' } },
+        code_explorer: { output: { summary: 'x', files_examined: [] } },
+      },
+    });
+
+    await goose.classifyIntent({
+      systemPrompt: 'orchestrator-prompt',
+      userContent: 'classify this please',
+      sessionId: 'sess_1',
+      correlationId: 'corr_1',
+    });
+
+    await goose.runMinion({
+      minionType: 'code_explorer',
+      systemPrompt: 'code-explorer-prompt',
+      userContent: 'explore this please',
+      sessionId: 'sess_1',
+      correlationId: 'corr_1.0',
+      minionToken: 'a-real-caller-minted-token',
+    });
+
+    // `receivedRequests` is the ground truth of what the "model" (the fake
+    // standing in for Goose) actually saw -- this is what M16's review
+    // finding F1 says nothing currently pins: whether runner.ts's
+    // `quarantineUntrusted` wiring actually reaches this seam.
+    expect(goose.receivedRequests).toEqual([
+      expect.objectContaining({ minionType: 'orchestrator', userContent: 'classify this please' }),
+      expect.objectContaining({ minionType: 'code_explorer', userContent: 'explore this please' }),
+    ]);
+  });
 });

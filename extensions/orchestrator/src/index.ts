@@ -11,4 +11,10 @@ export {
   type GooseReplyRequestPayload,
   type GooseReplyResponsePayload,
 } from './goose-client.js';
-export { createFakeGooseClient, type FakeGooseClientConfig, type ScriptedMinionTurn } from './fake-goose-client.js';
+export {
+  createFakeGooseClient,
+  type FakeGooseClient,
+  type FakeGooseClientConfig,
+  type FakeGooseReceivedRequest,
+  type ScriptedMinionTurn,
+} from './fake-goose-client.js';

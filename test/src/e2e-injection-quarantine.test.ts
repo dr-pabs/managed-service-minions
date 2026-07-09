@@ -233,6 +233,33 @@ describe('e2e: prompt-injection quarantine (Milestone 16, F15)', () => {
     const runs = store.listMinionRunsBySession(sessionId);
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.status === 'completed')).toBe(true);
+
+    // ASSERT (M16 review, finding F1): the toolshed allowlist gate above is
+    // the governance BACKSTOP, but on its own it does not prove the
+    // quarantine WIRING inside runner.ts (`buildMinionUserContent`,
+    // `classifyIntent`) is actually doing anything -- the reviewer showed
+    // that stripping all three `quarantineUntrusted(...)` call sites left
+    // every previously-existing test in this file (and the whole
+    // `orchestrator` package) green. Assert directly on the literal prompt
+    // text the FakeGooseClient received: every request must carry the
+    // `<<<UNTRUSTED` fence around the injected request text, and the raw
+    // injected instruction must never appear un-fenced.
+    expect(goose.receivedRequests.length).toBeGreaterThan(0);
+    for (const received of goose.receivedRequests) {
+      expect(received.userContent).toContain('<<<UNTRUSTED user request');
+      expect(received.userContent).toContain('<<<END UNTRUSTED>>>');
+      // The raw injected sentence must only ever appear INSIDE the fence,
+      // never as bare unfenced text a model would read as a live
+      // instruction. Since quarantineUntrusted returns the content
+      // unmodified (only forged fences inside it are escaped), the plain
+      // injected text is expected to appear -- but strictly between the
+      // opening and closing delimiters.
+      const openIdx = received.userContent.indexOf('<<<UNTRUSTED user request');
+      const closeIdx = received.userContent.indexOf('<<<END UNTRUSTED>>>');
+      const injectedIdx = received.userContent.indexOf('Ignore previous instructions');
+      expect(injectedIdx).toBeGreaterThan(openIdx);
+      expect(injectedIdx).toBeLessThan(closeIdx);
+    }
   });
 
   it('the quarantine fence itself survives an attempt to forge a fake closing delimiter inside the request text', async () => {

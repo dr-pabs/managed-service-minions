@@ -31,13 +31,37 @@ export interface FakeGooseClientConfig {
 }
 
 /**
+ * One request the fake actually received, in call order. This is the exact
+ * text the "model" (the seam a real Goose process would occupy) saw --
+ * capturing it lets tests assert on what the CALLER (the orchestrator
+ * runner) sent, not just on the fake's scripted response. Added for the
+ * Milestone 16 review's finding F1: without this, nothing pinned that
+ * `runner.ts`'s `quarantineUntrusted` wiring at `buildMinionUserContent`/
+ * `classifyIntent` actually reaches this seam -- stripping all three call
+ * sites left every then-existing test green (see the ExecPlan's M16 review
+ * remediation entry).
+ */
+export interface FakeGooseReceivedRequest {
+  /** "orchestrator" for a classifyIntent call, else the minion type. */
+  minionType: string;
+  systemPrompt: string;
+  userContent: string;
+}
+
+export interface FakeGooseClient extends GooseClient {
+  /** Every request received so far, in call order (classifyIntent and runMinion both append). */
+  readonly receivedRequests: FakeGooseReceivedRequest[];
+}
+
+/**
  * Scripted `GooseClient` double for tests (Milestone 11 acceptance: "no
  * network... FakeGooseClient with scripted per-minion responses"). Tracks
  * how many times each minion type has been called so a script can supply
  * different output on a retry.
  */
-export function createFakeGooseClient(config: FakeGooseClientConfig): GooseClient {
+export function createFakeGooseClient(config: FakeGooseClientConfig): FakeGooseClient {
   const callCounts = new Map<string, number>();
+  const receivedRequests: FakeGooseReceivedRequest[] = [];
 
   async function runToolCalls(
     minionToken: string,
@@ -76,8 +100,14 @@ export function createFakeGooseClient(config: FakeGooseClientConfig): GooseClien
   }
 
   return {
+    receivedRequests,
     classifyIntent: async (args) => {
       const turn = config.script.orchestrator;
+      receivedRequests.push({
+        minionType: 'orchestrator',
+        systemPrompt: args.systemPrompt,
+        userContent: args.userContent,
+      });
       if (!turn) {
         throw new Error('FakeGooseClient: no scripted turn for minion type "orchestrator"');
       }
@@ -94,6 +124,11 @@ export function createFakeGooseClient(config: FakeGooseClientConfig): GooseClien
     },
     runMinion: async (request: GooseMinionRequest) => {
       const turn = config.script[request.minionType];
+      receivedRequests.push({
+        minionType: request.minionType,
+        systemPrompt: request.systemPrompt,
+        userContent: request.userContent,
+      });
       if (!turn) {
         throw new Error(`FakeGooseClient: no scripted turn for minion type "${request.minionType}"`);
       }
