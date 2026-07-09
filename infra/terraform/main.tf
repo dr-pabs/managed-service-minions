@@ -4,7 +4,7 @@ locals {
     {
       environment = var.environment
       managed_by  = "terraform"
-      project     = "goose-agent-framework"
+      project     = "minions-agent-framework"
     },
     var.tags
   )

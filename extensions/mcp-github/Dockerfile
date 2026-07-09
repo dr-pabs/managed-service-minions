@@ -15,8 +15,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY extensions/mcp-github ./extensions/mcp-github
 
-RUN pnpm --filter "@goose-agent-framework/mcp-github" build \
-    && pnpm --filter "@goose-agent-framework/mcp-github" deploy --prod --legacy /prod
+RUN pnpm --filter "@minions-agent-framework/mcp-github" build \
+    && pnpm --filter "@minions-agent-framework/mcp-github" deploy --prod --legacy /prod
 
 FROM node:22-bookworm-slim
 

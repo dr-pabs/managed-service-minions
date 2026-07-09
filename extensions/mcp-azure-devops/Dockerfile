@@ -15,8 +15,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY extensions/mcp-azure-devops ./extensions/mcp-azure-devops
 
-RUN pnpm --filter "@goose-agent-framework/mcp-azure-devops" build \
-    && pnpm --filter "@goose-agent-framework/mcp-azure-devops" deploy --prod --legacy /prod
+RUN pnpm --filter "@minions-agent-framework/mcp-azure-devops" build \
+    && pnpm --filter "@minions-agent-framework/mcp-azure-devops" deploy --prod --legacy /prod
 
 FROM node:22-bookworm-slim
 

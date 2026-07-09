@@ -627,7 +627,7 @@ flowchart TB
 ```
 
 ```
-GitHub Repo: org/goose-agent-framework
+GitHub Repo: org/minions-agent-framework
 │
 ├── PR opened
 │   ├── Lint (Terraform, YAML, Markdown)

@@ -885,7 +885,7 @@ jobs:
 Meta-capability: minions can propose improvements to the framework itself:
 
 1. Code Reviewer minion notices a pattern of false negatives in its own review output
-2. It opens a PR against `goose-agent-framework` suggesting a prompt change
+2. It opens a PR against `minions-agent-framework` suggesting a prompt change
 3. Human operator reviews and merges
 4. All future reviews benefit from the improvement
 

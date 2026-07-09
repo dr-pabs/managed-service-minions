@@ -60,7 +60,7 @@ COPY rules/ /app/plugin/rules/
 COPY .plugin/ /app/plugin/.plugin/
 
 # Install the framework plugin into Goose's plugin directory
-RUN goose plugin install /app/plugin --name goose-agent-framework || true
+RUN goose plugin install /app/plugin --name minions-agent-framework || true
 
 EXPOSE 3284
 

@@ -14,7 +14,7 @@ variable.
 Build the server:
 
 ```bash
-pnpm --filter @goose-agent-framework/mcp-github build
+pnpm --filter @minions-agent-framework/mcp-github build
 ```
 
 Add the server to your Goose config (`~/.config/goose/config.yaml`):
@@ -81,7 +81,7 @@ via the `TOOLSHED_ADAPTERS` environment variable:
 ]
 ```
 
-After building the extension (`pnpm --filter @goose-agent-framework/mcp-azure-devops build`),
+After building the extension (`pnpm --filter @minions-agent-framework/mcp-azure-devops build`),
 start the toolshed with `TOOLSHED_ADAPTERS` set to the JSON above. Minions can
 then call Azure DevOps tools such as `ado_get_pull_request`, `ado_list_work_items`,
 and `ado_update_work_item` through the toolshed.
@@ -106,7 +106,7 @@ via the `TOOLSHED_ADAPTERS` environment variable:
 ]
 ```
 
-After building the extension (`pnpm --filter @goose-agent-framework/mcp-servicenow build`),
+After building the extension (`pnpm --filter @minions-agent-framework/mcp-servicenow build`),
 start the toolshed with `TOOLSHED_ADAPTERS` set to the JSON above. Minions can
 then call ServiceNow tools such as `servicenow_list_incidents`,
 `servicenow_get_incident`, `servicenow_update_incident`, and
@@ -132,7 +132,7 @@ The `extensions/mcp-jira` MCP server can be registered with the toolshed via the
 ]
 ```
 
-After building the extension (`pnpm --filter @goose-agent-framework/mcp-jira build`),
+After building the extension (`pnpm --filter @minions-agent-framework/mcp-jira build`),
 start the toolshed with `TOOLSHED_ADAPTERS` set to the JSON above. Minions can
 then call Jira tools such as `jira_list_issues`, `jira_get_issue`,
 `jira_update_issue`, `jira_create_issue`, and `jira_add_comment` through the
