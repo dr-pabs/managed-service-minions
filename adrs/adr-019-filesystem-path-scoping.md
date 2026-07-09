@@ -2,7 +2,7 @@
 
 | Key | Value |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Accepted (implemented 2026-07-09 — see status note below) |
 | **Date** | 2026-06-06 |
 | **Deciders** | Goose Agent Framework team |
 | **Replaces** | — |
@@ -91,3 +91,9 @@ Minion: Ticket Analyst
 - **Path scopes must be maintained** — Mitigation: Scopes are defined in the minion manifest alongside the tool allowlist. PR-reviewed, version-controlled.
 - **Granularity trade-off** — Too narrow and minions can't follow cross-cutting concerns (e.g., a refactor touching 3 modules). Mitigation: The orchestrator can spawn multiple minions with different scopes for cross-cutting tasks.
 - **Denylist mode has escape risk** — If a sensitive directory is added but not denylisted, it's exposed. Mitigation: Use `allowlist` mode for sensitive minions. Reserve `denylist` for broad explorers where the default posture is "see everything except these obvious exclusions."
+
+---
+
+## Status note (2026-07-09): implemented and hardened
+
+Path scoping was implemented in the `mcp-toolshed` enforcement pipeline and hardened by the 2026-07-08 remediation ExecPlan (Milestone 5, security finding H1): `isPathAllowed` in `extensions/mcp-toolshed/src/config.ts` was rewritten around path normalization, workspace base-path boundary checks, per-minion allowlist scopes, and deny-glob patterns, with regression tests for traversal (`../`) and prefix-collision escapes. Path parameters are identified per tool via `governance.pathCheckedTools`. Symlink resolution is not performed at this layer (paths are checked lexically after normalization). Shell command governance (H2/F5) landed in the same milestone as the companion control. Status accordingly moves Proposed → Accepted.
