@@ -1,6 +1,6 @@
 # Agent Definitions
 
-This folder contains agent-role definitions for the Goose Agent Framework delivery model.
+This folder contains agent-role definitions for the Minions Agent Framework delivery model.
 
 ## Files
 - [framework-engineer-agent.md](framework-engineer-agent.md)

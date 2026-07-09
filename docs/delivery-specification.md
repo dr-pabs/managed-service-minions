@@ -1,4 +1,4 @@
-# Delivery Specification — Goose Agent Framework
+# Delivery Specification — Minions Agent Framework
 
 > **Status:** Draft for implementation delivery  
 > **Date:** 2026-06-06  

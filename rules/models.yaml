@@ -1,4 +1,4 @@
-# Model tier routing for the Goose Agent Framework.
+# Model tier routing for the Minions Agent Framework.
 #
 # Tier names are stable; the model behind each tier is operator configuration.
 # Set deployment and provider to whatever is current in your environment.
@@ -28,6 +28,15 @@
 #   Hard cap on tokens requested per call for cost and latency control.
 #   Set this per-tier to match the model's context window and your budget.
 #
+# price_per_1k_tokens_usd:  (optional, Milestone 13 — dashboard cost endpoint)
+#   Blended USD price per 1,000 tokens for this tier, used ONLY by
+#   GET /api/sessions/:id/cost to estimate spend from MinionRun.tokensUsed.
+#   Purely a dashboard convenience figure, not billing-grade: it does not
+#   distinguish input/output token price (most providers charge differently
+#   for each) and defaults to 0 when omitted, so an unconfigured tier costs
+#   nothing rather than throwing. Set to your provider's actual blended or
+#   worst-case rate for a meaningful estimate.
+#
 # ── How to configure ─────────────────────────────────────────────────────────
 #
 # 1. Set deployment + provider for each tier (below).
@@ -44,30 +53,35 @@ tiers:
     deployment: ""
     provider: ""
     max_tokens_per_call: 4096
+    price_per_1k_tokens_usd: 0.0005
 
   # Orchestration, task decomposition, structured output.
   reasoning:
     deployment: ""
     provider: ""
     max_tokens_per_call: 16384
+    price_per_1k_tokens_usd: 0.003
 
   # Code review — deep diff analysis, multi-file reasoning.
   code_review:
     deployment: ""
     provider: ""
     max_tokens_per_call: 32768
+    price_per_1k_tokens_usd: 0.015
 
   # Code generation — PR crafter, patch writing.
   code_generation:
     deployment: ""
     provider: ""
     max_tokens_per_call: 16384
+    price_per_1k_tokens_usd: 0.015
 
   # Security auditing — adversarial reasoning, vulnerability analysis.
   security:
     deployment: ""
     provider: ""
     max_tokens_per_call: 32768
+    price_per_1k_tokens_usd: 0.015
 
 # ── Agent tier assignments ────────────────────────────────────────────────────
 # These map each agent to a tier above. Change the tier value to route an agent

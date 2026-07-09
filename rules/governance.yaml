@@ -34,8 +34,30 @@ governance:
     deny_patterns:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
+
+  # Path scope hardening (H1/M5): tool name -> list of param keys whose value
+  # is a filesystem path that isPathAllowed must check. Every listed key
+  # present on a call is checked (not just the first one found), so a tool
+  # that accepts more than one path-like param (none do yet) can never smuggle
+  # an unchecked one through. Replaces the old hardcoded five-tool
+  # `serverAliasForTool` list in extensions/mcp-toolshed/src/config.ts.
+  # `execute` (the virtual shell.execute tool) is checked on `cwd` so a
+  # minion cannot escape its sandbox by spawning a shell rooted elsewhere.
+  path_checked_tools:
+    read_file:
+      - path
+    list_directory:
+      - directory_path
+    search_files:
+      - search_path
+    write_file:
+      - path
+    edit_file:
+      - path
+    execute:
+      - cwd
 
   fallback_behavior:
     on_allowlist_block: escalate_and_terminate
@@ -44,3 +66,47 @@ governance:
     on_approval_timeout: deny
     on_minion_timeout: retry_up_to_3
     on_invalid_json_output: retry_once_with_feedback
+
+  # Caching is opt-in, read-only, and TTL-bound (C3 / F4): only tools listed
+  # here with cacheable: true are ever cached, and only idempotent reads
+  # qualify. Destructive tools (see destructive_actions above) must never be
+  # marked cacheable — scripts/validate-config.ts rejects that combination.
+  cache_policy:
+    default:
+      cacheable: false
+    github_get_pull_request_diff:
+      cacheable: true
+      ttl_seconds: 300
+    github_get_pull_request:
+      cacheable: true
+      ttl_seconds: 300
+    github_list_pull_requests:
+      cacheable: true
+      ttl_seconds: 60
+    ado_get_pull_request_diff:
+      cacheable: true
+      ttl_seconds: 300
+    ado_get_pull_request:
+      cacheable: true
+      ttl_seconds: 300
+    ado_list_pull_requests:
+      cacheable: true
+      ttl_seconds: 60
+    ado_list_work_items:
+      cacheable: true
+      ttl_seconds: 60
+    ado_get_work_item:
+      cacheable: true
+      ttl_seconds: 60
+    servicenow_list_incidents:
+      cacheable: true
+      ttl_seconds: 60
+    servicenow_get_incident:
+      cacheable: true
+      ttl_seconds: 60
+    jira_list_issues:
+      cacheable: true
+      ttl_seconds: 60
+    jira_get_issue:
+      cacheable: true
+      ttl_seconds: 60

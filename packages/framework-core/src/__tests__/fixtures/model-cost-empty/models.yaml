@@ -1,0 +1,2 @@
+# Fixture with no `tiers` key at all -- loadModelPricing must not throw.
+agents: {}

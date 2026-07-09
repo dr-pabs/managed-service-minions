@@ -5,7 +5,7 @@ enable_grafana = true
 
 tags = {
   environment = "dev"
-  project     = "goose-agent-framework"
+  project     = "minions-agent-framework"
 }
 
 # ── Azure AI Foundry model deployments ───────────────────────────────────────

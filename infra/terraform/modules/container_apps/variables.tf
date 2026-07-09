@@ -60,6 +60,13 @@ variable "dashboard" {
     identity_id = string
     image       = string
     port        = optional(number, 3001)
+    # Milestone 14 (review finding M7): Entra ID app registration for the
+    # Container Apps "easy auth" front door. Both null by default so the
+    # dashboard deploys without platform auth (local-dev/CI plans) until an
+    # operator supplies a real app registration; the app's own
+    # DASHBOARD_AUTH_TOKEN check remains the fallback either way.
+    entra_client_id = optional(string, null)
+    entra_tenant_id = optional(string, null)
   })
 }
 

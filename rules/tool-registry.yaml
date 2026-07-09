@@ -1,0 +1,66 @@
+# Single source of truth for which tools each MCP server alias actually
+# exports. Transcribed by hand from each server's tool list; keep in sync
+# whenever a server.ts gains or loses a tool (scripts/validate-config.ts and
+# extensions/mcp-toolshed's config-validation.test.ts both check this file
+# against rules/allowlists.yaml and rules/governance.yaml).
+#
+# Sources (tool name literals read directly from each server's `Tool` list):
+#   github       -> extensions/mcp-github/src/server.ts
+#   azure_devops -> extensions/mcp-azure-devops/src/server.ts
+#   servicenow   -> extensions/mcp-servicenow/src/server.ts
+#   jira         -> extensions/mcp-jira/src/server.ts
+#   shell        -> no extensions/mcp-shell package exists. "shell.execute" is
+#                   a virtual server alias: the toolshed dispatches it to
+#                   whatever adapter is registered under the alias "shell" at
+#                   runtime (via TOOLSHED_ADAPTERS), and rules/allowlists.yaml
+#                   already grants code_writer/test_writer the tool
+#                   "execute" under that alias. There is no server.ts to
+#                   transcribe from (Milestone 5 formalized shell command
+#                   governance on top of this virtual entry).
+#   filesystem   -> no extensions/mcp-filesystem package exists either. Like
+#                   "shell", "filesystem" is a virtual server alias reserved
+#                   for a future in-process or sandboxed file-access adapter.
+#                   No allowlist currently grants any minion a filesystem.*
+#                   tool, and no adapter is registered under this alias at
+#                   runtime; the five tool names below exist here solely so
+#                   rules/governance.yaml's path_checked_tools (Milestone 5,
+#                   H1) has a real registry entry to validate against instead
+#                   of referencing tool names that appear nowhere else in the
+#                   config tree.
+
+registry:
+  github:
+    - github_list_pull_requests
+    - github_get_pull_request
+    - github_get_pull_request_diff
+    - github_create_pull_request
+    - github_merge_pull_request
+    - github_create_issue_comment
+  azure_devops:
+    - ado_list_pull_requests
+    - ado_get_pull_request
+    - ado_get_pull_request_diff
+    - ado_create_pull_request
+    - ado_merge_pull_request
+    - ado_list_work_items
+    - ado_get_work_item
+    - ado_update_work_item
+  servicenow:
+    - servicenow_list_incidents
+    - servicenow_get_incident
+    - servicenow_update_incident
+    - servicenow_create_incident
+  jira:
+    - jira_list_issues
+    - jira_get_issue
+    - jira_update_issue
+    - jira_create_issue
+    - jira_add_comment
+  shell:
+    - execute
+  filesystem:
+    - read_file
+    - list_directory
+    - search_files
+    - write_file
+    - edit_file

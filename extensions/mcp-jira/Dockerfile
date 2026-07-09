@@ -15,8 +15,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY extensions/mcp-jira ./extensions/mcp-jira
 
-RUN pnpm --filter "@goose-agent-framework/mcp-jira" build \
-    && pnpm --filter "@goose-agent-framework/mcp-jira" deploy --prod --legacy /prod
+RUN pnpm --filter "@minions-agent-framework/mcp-jira" build \
+    && pnpm --filter "@minions-agent-framework/mcp-jira" deploy --prod --legacy /prod
 
 FROM node:22-bookworm-slim
 

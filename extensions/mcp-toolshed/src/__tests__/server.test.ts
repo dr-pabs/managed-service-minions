@@ -1,9 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { jest } from '@jest/globals';
 import { resetToolshed } from '../toolshed.js';
+import { mintMinionToken } from 'framework-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// extensions/mcp-toolshed/src/__tests__ -> repo root is four levels up
+// (matches config-validation.test.ts's own REPO_ROOT derivation).
+const REAL_REPO_ROOT = path.resolve(HERE, '../../../../');
 
 const mockSetRequestHandler = jest.fn() as jest.Mock<any>;
 const mockConnect = jest.fn() as jest.Mock<any>;
@@ -33,6 +40,8 @@ MockTransport.mockImplementation(() => ({}));
 
 const { parseAdapterConfigs, buildToolshedState, startToolshedServer } = await import('../server.js');
 
+const SECRET = 'test-signing-secret';
+
 describe('server', () => {
   let tmpDir: string;
 
@@ -43,6 +52,7 @@ describe('server', () => {
     mockConnect.mockClear();
     mockCreateMcpAdapter.mockClear();
     mockConnect.mockResolvedValue(undefined);
+    process.env.TOOLSHED_SIGNING_SECRET = SECRET;
   });
 
   afterEach(() => {
@@ -51,6 +61,11 @@ describe('server', () => {
     delete process.env.TOOLSHED_GOVERNANCE_PATH;
     delete process.env.TOOLSHED_STORE_PATH;
     delete process.env.TOOLSHED_ADAPTERS;
+    delete process.env.TOOLSHED_REPO_ROOT;
+    delete process.env.TOOLSHED_SIGNING_SECRET;
+    delete process.env.TOOLSHED_ALLOW_UNSIGNED;
+    delete process.env.TOOLSHED_WATCH_RULES;
+    delete process.env.NODE_ENV;
     resetToolshed();
   });
 
@@ -93,6 +108,8 @@ describe('server', () => {
       const state = await buildToolshedState();
       expect(state.governance.approvalTimeoutMinutes).toBe(5);
       expect(state.allowlists.allowlists.code_explorer.github).toContain('get_file_contents');
+      expect(state.signingSecret).toBe(SECRET);
+      expect(state.allowUnsignedTokens).toBe(false);
     });
 
     it('connects adapters from environment config', async () => {
@@ -136,35 +153,109 @@ describe('server', () => {
 
       warnSpy.mockRestore();
     });
+
+    it('succeeds when TOOLSHED_REPO_ROOT points at a config tree with zero validator errors', async () => {
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      process.env.TOOLSHED_REPO_ROOT = path.resolve(tmpDir, '..', '..', '..', '..', '..');
+      const state = await buildToolshedState();
+      expect(state).toBeDefined();
+      delete process.env.TOOLSHED_REPO_ROOT;
+    });
+
+    it('logs every validator error and refuses to start when TOOLSHED_REPO_ROOT has config drift', async () => {
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      fs.writeFileSync(
+        path.join(tmpDir, 'placeholder.txt'),
+        'an empty repo root has no agents/, rules/, or schemas/ dirs, so nothing to cross-check but the intent enum still triggers warnings, not errors'
+      );
+      // A repo root with no agents/*.md at all has nothing to flag under
+      // check (a); use one with a real drift instead: an agents/ dir whose
+      // frontmatter minion_type has no allowlists entry.
+      fs.mkdirSync(path.join(tmpDir, 'agents'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'agents', 'ghost.md'),
+        ['---', 'name: ghost', 'minion_type: ghost_type', '---', '# Ghost'].join('\n')
+      );
+      fs.mkdirSync(path.join(tmpDir, 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'rules', 'allowlists.yaml'), 'allowlists: {}\n');
+      fs.mkdirSync(path.join(tmpDir, 'schemas'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'schemas', 'intent.json'), '{}');
+
+      process.env.TOOLSHED_REPO_ROOT = tmpDir;
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await expect(buildToolshedState()).rejects.toThrow(/config validation failed/i);
+      expect(errorSpy).toHaveBeenCalled();
+      const loggedMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages.some((m) => m.includes('ghost_type'))).toBe(true);
+
+      errorSpy.mockRestore();
+      delete process.env.TOOLSHED_REPO_ROOT;
+    });
+
+    it('throws at startup when TOOLSHED_SIGNING_SECRET is unset in production', async () => {
+      delete process.env.TOOLSHED_SIGNING_SECRET;
+      process.env.NODE_ENV = 'production';
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+
+      await expect(buildToolshedState()).rejects.toThrow(/TOOLSHED_SIGNING_SECRET is required in production/i);
+    });
+
+    it('warns loudly but continues when TOOLSHED_SIGNING_SECRET is unset outside production', async () => {
+      delete process.env.TOOLSHED_SIGNING_SECRET;
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const state = await buildToolshedState();
+      expect(state.signingSecret).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('TOOLSHED_SIGNING_SECRET is not set'));
+
+      warnSpy.mockRestore();
+    });
+
+    it('warns loudly when TOOLSHED_ALLOW_UNSIGNED=1 is set', async () => {
+      process.env.TOOLSHED_ALLOW_UNSIGNED = '1';
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const state = await buildToolshedState();
+      expect(state.allowUnsignedTokens).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('TOOLSHED_ALLOW_UNSIGNED=1'));
+
+      warnSpy.mockRestore();
+    });
   });
 
   describe('startToolshedServer', () => {
     it('starts the server and registers handlers', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       expect(mockSetRequestHandler).toHaveBeenCalledTimes(2);
     });
 
-    it('invokes the ListTools handler', async () => {
+    it('invokes the ListTools handler and no longer exposes resolve_approval (C1 regression)', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const listToolsHandler = mockSetRequestHandler.mock.calls[0][1] as (req: unknown) => Promise<{ tools: Array<{ name: string }> }>;
       const response = await listToolsHandler?.({});
-      expect(response.tools).toHaveLength(2);
+      expect(response.tools).toHaveLength(1);
       expect(response.tools.map((t) => t.name)).toContain('execute_tool');
-      expect(response.tools.map((t) => t.name)).toContain('resolve_approval');
+      expect(response.tools.map((t) => t.name)).not.toContain('resolve_approval');
     });
 
-    it('invokes the CallTool handler', async () => {
+    it('invokes the CallTool handler with a valid minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, SECRET);
       const response = await callToolHandler?.({
         params: {
           arguments: {
             correlation_id: 'corr_1',
-            team_id: 'team-a',
-            minion_type: 'code-explorer',
+            minion_token: token,
             server_alias: 'github',
             tool_name: 'get_file_contents',
             params: { path: '/repo/readme.md' },
@@ -172,49 +263,120 @@ describe('server', () => {
         },
       });
       expect(response).toBeDefined();
-      expect(response.content[0].text).toContain('error');
+      // No allowlists.yaml is configured (default env), so this reaches the
+      // pipeline (past identity verification) and is blocked by the
+      // allowlist step — proving the token was verified and accepted, not
+      // merely that some error occurred.
+      expect(response.content[0].text).toContain('blocked_by_allowlist');
     });
 
-    it('invokes the CallTool handler without optional params', async () => {
+    it('invokes the CallTool handler without a minion token and rejects the call', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({
         params: {
           arguments: {
             correlation_id: 'corr_1',
-            minion_type: 'code-explorer',
             server_alias: 'github',
             tool_name: 'get_file_contents',
           },
         },
       });
-      expect(response.content[0].text).toContain('error');
+      expect(response.content[0].text).toContain('invalid minion token');
     });
 
     it('invokes the CallTool handler without arguments', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
       const response = await callToolHandler?.({ params: {} });
-      expect(response.content[0].text).toContain('error');
+      expect(response.content[0].text).toContain('invalid minion token');
     });
 
-    it('invokes the resolve_approval handler', async () => {
+    it('rejects a forged/tampered minion token', async () => {
       process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
-      await startToolshedServer(3000);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, 'wrong-secret');
       const response = await callToolHandler?.({
         params: {
-          name: 'resolve_approval',
           arguments: {
-            approval_id: 'appr_1',
-            decision: 'approved',
+            correlation_id: 'corr_1',
+            minion_token: token,
+            server_alias: 'github',
+            tool_name: 'get_file_contents',
+            params: { path: '/repo/readme.md' },
           },
         },
       });
-      expect(response.content[0].text).toContain('error');
-      expect(response.content[0].text).toContain('appr_1');
+      expect(response.content[0].text).toContain('invalid minion token');
+    });
+
+    it('accepts legacy minion_type/team_id params only when TOOLSHED_ALLOW_UNSIGNED=1', async () => {
+      resetToolshed();
+      process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+      process.env.TOOLSHED_ALLOW_UNSIGNED = '1';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { operatorHttp } = await startToolshedServer(0);
+      await operatorHttp.close();
+      warnSpy.mockRestore();
+      const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
+      const response = await callToolHandler?.({
+        params: {
+          arguments: {
+            correlation_id: 'corr_1',
+            team_id: 'team-a',
+            minion_type: 'code_explorer',
+            server_alias: 'github',
+            tool_name: 'get_file_contents',
+            params: { path: '/repo/readme.md' },
+          },
+        },
+      });
+      expect(response.content[0].text).toContain('blocked_by_allowlist');
+    });
+
+    describe('TOOLSHED_WATCH_RULES (Milestone 17, F16)', () => {
+      it('is disabled by default: startToolshedServer returns no hotReload handle', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        expect(hotReload).toBeUndefined();
+      });
+
+      it('warns and stays disabled when TOOLSHED_WATCH_RULES=1 but no allowlists/governance paths are set', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        process.env.TOOLSHED_WATCH_RULES = '1';
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        expect(hotReload).toBeUndefined();
+        expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('nothing to watch'))).toBe(true);
+        warnSpy.mockRestore();
+      });
+
+      it('starts a watcher against the real allowlists/governance paths when TOOLSHED_WATCH_RULES=1', async () => {
+        process.env.TOOLSHED_ADAPTERS = JSON.stringify([]);
+        process.env.TOOLSHED_WATCH_RULES = '1';
+        process.env.TOOLSHED_REPO_ROOT = REAL_REPO_ROOT;
+        process.env.TOOLSHED_ALLOWLISTS_PATH = path.join(REAL_REPO_ROOT, 'rules', 'allowlists.yaml');
+        process.env.TOOLSHED_GOVERNANCE_PATH = path.join(REAL_REPO_ROOT, 'rules', 'governance.yaml');
+        const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        const { operatorHttp, hotReload } = await startToolshedServer(0);
+        await operatorHttp.close();
+        try {
+          expect(hotReload).toBeDefined();
+          expect(logSpy.mock.calls.some((call) => String(call[0]).includes('hot-reload enabled'))).toBe(true);
+        } finally {
+          hotReload?.close();
+          logSpy.mockRestore();
+          delete process.env.TOOLSHED_REPO_ROOT;
+        }
+      });
     });
   });
 });

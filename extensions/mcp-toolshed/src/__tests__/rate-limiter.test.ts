@@ -34,4 +34,25 @@ describe('rate limiter', () => {
     expect(result.allowed).toBe(false);
     expect(result.retryAfterSeconds).toBeGreaterThanOrEqual(1);
   });
+
+  describe('canExecuteWithLimit (H4)', () => {
+    it('enforces a per-call limit independent of the constructor limit, keyed separately per bucket', () => {
+      // Constructor limit is generous; the per-key limit passed to
+      // canExecuteWithLimit is what actually governs this key's bucket.
+      const limiter = new TokenBucketRateLimiter({ requestsPerMinute: 6000, burst: 100 });
+      const tightLimit = { requestsPerMinute: 60, burst: 1 };
+      expect(limiter.canExecuteWithLimit('server:github', tightLimit, 0).allowed).toBe(true);
+      expect(limiter.canExecuteWithLimit('server:github', tightLimit, 0).allowed).toBe(false);
+      // A different key with the same limiter instance has its own bucket.
+      expect(limiter.canExecute('team:m:github:tool', 0).allowed).toBe(true);
+    });
+
+    it('refills a canExecuteWithLimit bucket over time using the supplied limit', () => {
+      const limiter = new TokenBucketRateLimiter({ requestsPerMinute: 60, burst: 20 });
+      const limit = { requestsPerMinute: 60, burst: 1 };
+      expect(limiter.canExecuteWithLimit('server:github', limit, 0).allowed).toBe(true);
+      expect(limiter.canExecuteWithLimit('server:github', limit, 0).allowed).toBe(false);
+      expect(limiter.canExecuteWithLimit('server:github', limit, 60_000).allowed).toBe(true);
+    });
+  });
 });

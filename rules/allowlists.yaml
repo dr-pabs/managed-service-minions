@@ -27,6 +27,15 @@ allowlists:
     github:
       - github_get_pull_request
       - github_get_pull_request_diff
+      # Milestone 15 (F11): the webhook-ingress reply path posts the review
+      # summary as a PR comment through the governed toolshed, minting a
+      # code_reviewer token exactly like any other code_reviewer tool call --
+      # code_reviewer is the terminal minion of the code_review DAG that
+      # pull_request.opened/check_suite.completed(failure) webhooks drive, so
+      # granting it here (not to the orchestrator, which never calls tools
+      # directly -- see ORCHESTRATOR_EXEMPTION) keeps the reply inside the
+      # same identity/audit trail as the rest of that minion's work.
+      - github_create_issue_comment
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
@@ -58,8 +67,9 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
-    # shell.execute has no command-pattern allowlist; enforcement is prompt-level only.
-    # Accepted risk: agents run inside the /repo sandbox; prompt restricts usage to test/lint commands.
+    # shell.execute is now governed by the shell_commands block below (H2/F5):
+    # command-pattern allow/deny is enforced by the toolshed itself, not left
+    # to prompt-level convention alone. See shell_commands.code_writer.
     shell:
       - execute
   test_writer:
@@ -69,7 +79,7 @@ allowlists:
     azure_devops:
       - ado_get_pull_request
       - ado_get_pull_request_diff
-    # Same accepted risk as code_writer — shell.execute restricted to test-runner commands by prompt.
+    # See shell_commands.test_writer below (H2/F5).
     shell:
       - execute
 
@@ -81,7 +91,7 @@ path_scopes:
     deny:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
   code_reviewer: *repo-path-scope
   pr_create: *repo-path-scope
@@ -99,5 +109,55 @@ path_scopes:
     deny:
       - .git/
       - node_modules/
-      - secrets/
+      - secrets/**
       - .env*
+
+# Shell command governance (H2/F5): per-minion allow/deny glob lists matched
+# against the trimmed command string by extensions/mcp-toolshed/src/config.ts
+# isShellCommandAllowed. Deny always wins over allow. A minion with NO entry
+# here has shell access denied entirely -- there is no implicit allow, and no
+# minion other than code_writer/test_writer is granted shell.execute above.
+#
+# Pattern notes (M5 review B1): deny patterns are picomatch globs where `*`
+# spans any characters (config.ts compiles with {bash:true} and escapes the
+# literal `|`). Write pipe/redirect denies with NO surrounding spaces --
+# "*|*" and "*>*", NOT "* | *" -- so they catch unspaced forms like
+# "pnpm test|bash" and "pnpm test|nc host 1234", not just the fully-spaced
+# " | " form (a space-requiring "* | *" was a live pipe-to-arbitrary-command
+# bypass; see the Decision Log CORRECTION). Matching only ever sees the FIRST
+# line of the command (bash `*` does not span a newline), so allow patterns
+# must never be widened to tolerate multiline input, or a second line could
+# slip past the deny list unexamined.
+shell_commands:
+  code_writer:
+    allow:
+      - "pnpm *"
+      - "npm test*"
+      - "npx jest*"
+      - "git diff*"
+      - "git status"
+      - "git log*"
+    deny:
+      - "*|*"
+      - "*curl*"
+      - "*wget*"
+      - "*ssh*"
+      - "git push*"
+      - "rm -rf*"
+      - "*>*"
+  test_writer:
+    allow:
+      - "pnpm *"
+      - "npm test*"
+      - "npx jest*"
+      - "git diff*"
+      - "git status"
+      - "git log*"
+    deny:
+      - "*|*"
+      - "*curl*"
+      - "*wget*"
+      - "*ssh*"
+      - "git push*"
+      - "rm -rf*"
+      - "*>*"

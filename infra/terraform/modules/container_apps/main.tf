@@ -116,6 +116,10 @@ resource "azurerm_container_app" "slack_bot" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the bot shares the same mounted
+    # SQLite file as the toolshed/dashboard and posts through the toolshed's
+    # process-local rate limiter/breaker; a second replica adds no
+    # coordination-safe capacity today.
     min_replicas = 1
     max_replicas = 1
 
@@ -181,8 +185,17 @@ resource "azurerm_container_app" "toolshed" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the rate limiter's token buckets,
+    # circuit breakers, and pending-approval reads/writes are process-local
+    # state with no cross-replica coordination. Running >1 replica here would
+    # silently multiply effective rate limits, let each replica's breaker
+    # trip independently of the others, and risk inconsistent approval reads
+    # across the shared SQLite file. Revisit only per ADR-025's trigger
+    # condition (sustained load beyond one replica's capacity, measured via
+    # Milestone 13 metrics), and only after GovernanceStateStore gets a real
+    # distributed implementation.
     min_replicas = 1
-    max_replicas = 3
+    max_replicas = 1
 
     volume {
       name         = "sqlite-data"
@@ -260,8 +273,16 @@ resource "azurerm_container_app" "dashboard" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the dashboard shares the same
+    # mounted SQLite file as the toolshed and, from Milestone 14, proxies
+    # operator approve/deny actions to the toolshed's operator endpoint — it
+    # has no independent governance state of its own but inherits the same
+    # "one writer's view is authoritative" assumption in the approval path.
+    # It is a read/proxy layer with no rate-limiter or breaker state, so
+    # unlike the toolshed there is no throughput reason to scale it out
+    # today either.
     min_replicas = 1
-    max_replicas = 3
+    max_replicas = 1
 
     volume {
       name         = "sqlite-data"
@@ -327,6 +348,51 @@ resource "azurerm_container_app" "dashboard" {
   }
 }
 
+# Milestone 14 (review finding M7 "the dashboard has no auth", closed):
+# production front door for the dashboard is Azure Container Apps' built-in
+# Entra ID authentication ("easy auth"), NOT `DASHBOARD_AUTH_TOKEN` — that
+# token is the local-dev fallback the app itself enforces
+# (extensions/agent-dashboard/src/dashboard.ts, `isDashboardAuthorized`) when
+# no platform-level auth is available. `azurerm` 3.x's `azurerm_container_app`
+# resource has no native easy-auth block (that support landed in the ARM API
+# as `Microsoft.App/containerApps/authConfigs`, a child resource this
+# provider version doesn't model), so this is expressed via `azapi_resource`
+# against the same underlying ARM API the AI Foundry module already uses.
+# Requiring authentication rejects unauthenticated requests at the platform
+# edge — the dashboard's own `DASHBOARD_AUTH_TOKEN` check becomes defense in
+# depth once this is enabled, not the primary control.
+resource "azapi_resource" "dashboard_easy_auth" {
+  count = var.dashboard.entra_client_id != null ? 1 : 0
+
+  type      = "Microsoft.App/containerApps/authConfigs@2023-05-01"
+  name      = "current"
+  parent_id = azurerm_container_app.dashboard.id
+
+  body = {
+    properties = {
+      platform = {
+        enabled = true
+      }
+      globalValidation = {
+        # Any signed-in Entra ID user in the tenant is authenticated by the
+        # platform; the dashboard's own operator-identity checks (approve/deny
+        # proxy, Milestone 14) still gate WHAT an authenticated user can do.
+        unauthenticatedClientAction = "RedirectToLoginPage"
+      }
+      identityProviders = {
+        azureActiveDirectory = {
+          enabled = true
+          registration = {
+            clientId                = var.dashboard.entra_client_id
+            clientSecretSettingName = "dashboard-entra-client-secret"
+            openIdIssuer            = "https://login.microsoftonline.com/${var.dashboard.entra_tenant_id}/v2.0"
+          }
+        }
+      }
+    }
+  }
+}
+
 resource "azurerm_container_app" "teams_bot" {
   name                         = var.teams_bot.name
   resource_group_name          = var.resource_group_name
@@ -339,6 +405,10 @@ resource "azurerm_container_app" "teams_bot" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the bot shares the same mounted
+    # SQLite file as the toolshed/dashboard and posts through the toolshed's
+    # process-local rate limiter/breaker; a second replica adds no
+    # coordination-safe capacity today.
     min_replicas = 1
     max_replicas = 1
 
@@ -389,5 +459,25 @@ resource "azurerm_container_app" "teams_bot" {
     ignore_changes = [
       template[0].container[0].image
     ]
+  }
+}
+
+terraform {
+  required_version = ">= 1.9"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+    # Milestone 14: azapi_resource.dashboard_easy_auth needs its own
+    # required_providers block (same as modules/ai_foundry) -- Terraform
+    # does not implicitly propagate a non-default-namespace provider's
+    # source address ("azure/azapi", not "hashicorp/azapi") down into a
+    # child module just because the root module declares it.
+    azapi = {
+      source  = "azure/azapi"
+      version = "~> 1.0"
+    }
   }
 }

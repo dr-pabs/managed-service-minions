@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This folder contains the design, delivery, governance, and implementation scaffolding for the Goose Agent Framework. The primary focus remains specification- and architecture-oriented, but the repository now includes runnable TypeScript packages and MCP extensions.
+This folder contains the design, delivery, governance, and implementation scaffolding for the Minions Agent Framework. The primary focus remains specification- and architecture-oriented, but the repository now includes runnable TypeScript packages and MCP extensions.
 
 Primary source documents include:
 - `./docs/high-level-design.md` — system architecture and core capabilities
@@ -53,7 +53,7 @@ Common commands (after `pnpm install`):
 - `pnpm test:prompts` — run prompt-quality harness.
 
 Quality gates:
-- **100% code coverage** is required for all runnable TypeScript code in `packages/` and `extensions/`. The CI pipeline fails if any package drops below 100% line, branch, function, and statement coverage. See `./docs/testing-strategy.md` for the full coverage policy.
+- **Coverage thresholds** are required for all runnable TypeScript code in `packages/` and `extensions/`: 95% branch and line coverage, 100% function and statement coverage per package. The CI pipeline fails if any package drops below its configured threshold. See `./docs/testing-strategy.md` and `./adrs/adr-023-100-percent-test-coverage-gate.md` (including its 2026-07-09 amendment) for the full coverage policy and why branches/lines were lowered from 100%.
 - **Red build policy ("Ralph Wiggum" loop):** a failing CI check blocks merge until the root cause is fixed, the full pipeline is green, and a maintainer/QA reviewer approves the fix. No bypasses.
 
 For day-to-day work here:

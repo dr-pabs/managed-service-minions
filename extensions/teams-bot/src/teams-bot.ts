@@ -39,6 +39,12 @@ function toTeamsRequest(activity: Activity): IngressRequest | undefined {
     channelId: activity.conversation?.id,
     userId: activity.from?.id ?? 'unknown',
     text,
+    // M3 (review) mirror check: Teams has no bare "channel" concept the way
+    // Slack does — `conversation.id` already identifies one specific
+    // conversation/thread (a 1:1 chat, a channel thread, or a channel's
+    // "General" root each get distinct conversation ids from Bot Framework),
+    // so there is no channel-wide collision to fix here. Kept keyed by
+    // conversation id, same as before this milestone.
     threadId: activity.conversation?.id,
   };
 }

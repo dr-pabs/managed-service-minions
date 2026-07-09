@@ -16,14 +16,20 @@
     "@azure/storage-blob": "^12.27.0",
     "@modelcontextprotocol/sdk": "^1.15.0",
     "better-sqlite3": "^12.4.0",
-    "framework-core": "workspace:*"
+    "framework-core": "workspace:*",
+    "picomatch": "^4.0.5"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
+    "@opentelemetry/context-async-hooks": "^2.9.0",
+    "@opentelemetry/sdk-metrics": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jest": "^29.5.14",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.15.17",
+    "@types/picomatch": "^4.0.3",
     "js-yaml": "^4.1.0",
     "ts-jest": "^29.4.11",
     "typescript": "^5.8.3"

@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GitHubClient } from './client.js';
 import {
+  createIssueCommentInputSchema,
   createPullRequestInputSchema,
   listPullRequestsInputSchema,
   mergePullRequestInputSchema,
@@ -85,6 +86,20 @@ const githubTools: Tool[] = [
       required: ['owner', 'repo', 'pull_number'],
     },
   },
+  {
+    name: 'github_create_issue_comment',
+    description: 'Post a comment on a GitHub issue or pull request (PRs are issues in the GitHub API).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        issue_number: { type: 'integer' },
+        body: { type: 'string' },
+      },
+      required: ['owner', 'repo', 'issue_number', 'body'],
+    },
+  },
 ];
 
 export function createGitHubServer(client: GitHubClient): Server {
@@ -117,6 +132,9 @@ export function createGitHubServer(client: GitHubClient): Server {
           break;
         case 'github_merge_pull_request':
           data = await client.mergePullRequest(mergePullRequestInputSchema.parse(args));
+          break;
+        case 'github_create_issue_comment':
+          data = await client.createIssueComment(createIssueCommentInputSchema.parse(args));
           break;
         default:
           throw new Error(`Unknown tool: ${name}`);

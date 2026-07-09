@@ -1,7 +1,7 @@
 # Agent Build Team Overview
 
 > Date: 2026-06-06  
-> Purpose: Explain how the Goose agent framework operates, how its harness works, and how to get the best results from working with the agent build team.
+> Purpose: Explain how the Minions Agent Framework operates, how its harness works, and how to get the best results from working with the agent build team.
 
 ---
 

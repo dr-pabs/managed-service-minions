@@ -1,4 +1,4 @@
-# Goose Agent Framework — High-Level Design
+# Minions Agent Framework — High-Level Design
 
 > **Status:** Revised Draft  
 > **Date:** 2026-06-05  
@@ -30,7 +30,7 @@
 
 ## Overview
 
-The Goose Agent Framework extends the core Goose platform into a **multi-agent orchestration system** where specialized sub-agents ("minions") collaborate to perform complex tasks across large codebases. The system ingests work from chat platforms (Slack, Microsoft Teams), ticket systems (ServiceNow, Jira, Azure DevOps), and scheduled triggers, then decomposes, delegates, and synthesizes results back to the user.
+The Minions Agent Framework extends the core Goose platform into a **multi-agent orchestration system** where specialized sub-agents ("minions") collaborate to perform complex tasks across large codebases. The system ingests work from chat platforms (Slack, Microsoft Teams), ticket systems (ServiceNow, Jira, Azure DevOps), and scheduled triggers, then decomposes, delegates, and synthesizes results back to the user.
 
 ### Capabilities
 
@@ -483,7 +483,7 @@ The storage strategy uses **three purpose-built stores**, rejecting the expensiv
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                  Goose Agent Framework                    │
+│                  Minions Agent Framework                  │
 │                                                           │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐  │
 │  │  Session     │   │  Tool Call   │   │  Minion      │  │
@@ -511,12 +511,12 @@ Plus Azure Monitor / Log Analytics for search, dashboards, and alerting:
 
 | Aspect | Detail |
 |---|---|
-| **Purpose** | Hot orchestrator session state — active conversations, in-flight minions, pending approvals |
-| **Location** | Local to the orchestrator container (ephemeral, backed up to Blob) |
-| **Schema** | Sessions, minion_runs, pending_approvals, rate_limit_counters |
+| **Purpose** | Hot session state — active conversations, in-flight minions, pending approvals |
+| **Location** | Local to the toolshed container, on a mounted Azure Files share (`extensions/mcp-toolshed/src/store.ts`); the orchestrator's own conversation/session bookkeeping is a separate concern from the toolshed's governance state |
+| **Schema** | Sessions, minion_runs, pending_approvals; rate limiter and circuit breaker state are in-process (`Map`-backed, not persisted to SQLite — see `rate-limiter.ts`/`circuit-breaker.ts`) |
 | **Backup** | Periodic WAL snapshots to Azure Blob (cool tier) |
 | **Cost** | $0 (embedded, no Azure resource) |
-| **Limitation** | Not shared across orchestrator replicas (acceptable for dev/single-node; for HA, session affinity via Service Bus sessions) |
+| **Limitation** | **Not shared across replicas, and the toolshed/bots/dashboard are pinned to a single replica because of it (ADR-025)** — pending approvals, the rate limiter's token buckets, and circuit breaker state are process-local with no cross-replica coordination, so unlike the orchestrator (which scales via Service Bus session affinity, ADR-004/ADR-012) there is no session-affinity trick that makes multiple toolshed replicas safe. See ADR-025 for the trigger condition and the deferred Redis/Table-Storage-lease alternatives. |
 
 ### Azure Table Storage — Tool Call Log
 
@@ -794,10 +794,10 @@ GitHub serves multiple roles in the framework, not just as an integration target
 
 ### a) Framework Source of Truth (Primary)
 
-The Goose agent framework itself lives in GitHub:
+The Minions Agent Framework itself lives in GitHub:
 
 ```
-github.com/your-org/goose-agent-framework/
+github.com/dr-pabs/managed-service-minions/
 ├── extensions/
 │   ├── orchestrator/
 │   │   ├── extension.yaml
@@ -885,7 +885,7 @@ jobs:
 Meta-capability: minions can propose improvements to the framework itself:
 
 1. Code Reviewer minion notices a pattern of false negatives in its own review output
-2. It opens a PR against `goose-agent-framework` suggesting a prompt change
+2. It opens a PR against `minions-agent-framework` suggesting a prompt change
 3. Human operator reviews and merges
 4. All future reviews benefit from the improvement
 

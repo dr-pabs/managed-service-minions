@@ -2,7 +2,7 @@
   "name": "framework-core",
   "version": "0.1.0",
   "type": "module",
-  "description": "Shared core library for the Goose Agent Framework.",
+  "description": "Shared core library for the Minions Agent Framework.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
@@ -10,7 +10,20 @@
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
   },
   "devDependencies": {
+    "@opentelemetry/context-async-hooks": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
+    "@types/js-yaml": "^4.0.9",
     "typescript": "^5.8.3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-metrics": "^2.9.0",
+    "@opentelemetry/sdk-node": "^0.220.0",
+    "@opentelemetry/semantic-conventions": "^1.42.0",
+    "ajv": "^8.20.0",
+    "js-yaml": "^4.2.0"
+  }
 }

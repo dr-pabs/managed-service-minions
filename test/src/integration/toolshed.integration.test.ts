@@ -26,12 +26,13 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
       })
     );
 
     const result = await executeTool(
-      { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 },
+      { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 },
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
@@ -43,7 +44,7 @@ describe('toolshed integration', () => {
     expect(store.listAuditEntries()[0].status).toBe('success');
   });
 
-  it('returns the cached result on identical calls', async () => {
+  it('returns the cached result on identical calls to a tool marked cacheable', async () => {
     const callTool = jest.fn(async () => ({ cached: true })) as unknown as (
       name: string,
       params: unknown
@@ -58,16 +59,56 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
+        },
+        governance: {
+          destructiveActions: [],
+          approvalTimeoutMinutes: 15,
+          rateLimits: { default: { requestsPerMinute: 60, burst: 20 } },
+          workspaceBoundaries: { allowedBasePaths: ['/repo'], denyPatterns: [] },
+          cachePolicy: {
+            default: { cacheable: false },
+            get_file_contents: { cacheable: true, ttlSeconds: 300 },
+          },
+          pathCheckedTools: {},
         },
       })
     );
 
-    const ctx = { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 };
+    const ctx = { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 };
     await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
     const result = await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
 
     expect(result.status).toBe('success');
     expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a tool with no cache_policy entry (C3): identical calls invoke the adapter twice', async () => {
+    const callTool = jest.fn(async () => ({ cached: true })) as unknown as (
+      name: string,
+      params: unknown
+    ) => Promise<unknown>;
+    const adapter = createMockAdapter('github', { callTool });
+    const store = createMemoryStore();
+
+    initializeToolshed(
+      createDefaultToolshedState({
+        store,
+        adapters: new Map([['github', adapter]]),
+        allowlists: {
+          allowlists: { code_explorer: { github: ['get_file_contents'] } },
+          pathScopes: {},
+          shellCommands: {},
+        },
+      })
+    );
+
+    const ctx = { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 };
+    await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
+    const result = await executeTool(ctx, 'github', 'get_file_contents', { path: '/repo/readme.md' });
+
+    expect(result.status).toBe('success');
+    expect(callTool).toHaveBeenCalledTimes(2);
   });
 
   it('blocks disallowed tools', async () => {
@@ -79,12 +120,13 @@ describe('toolshed integration', () => {
         allowlists: {
           allowlists: { code_explorer: { github: ['get_file_contents'] } },
           pathScopes: {},
+          shellCommands: {},
         },
       })
     );
 
     const result = await executeTool(
-      { teamId: 'team-a', minionType: 'code-explorer', correlationId: 'corr_1', attempt: 1 },
+      { teamId: 'team-a', minionType: 'code-explorer', sessionId: 'sess_1', correlationId: 'corr_1', attempt: 1 },
       'github',
       'delete_repo',
       {}

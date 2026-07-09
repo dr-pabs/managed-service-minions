@@ -1,8 +1,8 @@
 {
-  "name": "@goose-agent-framework/mcp-github",
+  "name": "@minions-agent-framework/mcp-github",
   "version": "0.1.0",
   "type": "module",
-  "description": "GitHub MCP server for Goose minion PR review and automation.",
+  "description": "GitHub MCP server extension for the Minions Agent Framework: PR review and automation.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.15.0",
+    "framework-core": "workspace:*",
     "zod": "^3.24.2"
   },
   "devDependencies": {

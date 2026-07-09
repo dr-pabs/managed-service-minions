@@ -52,6 +52,8 @@ jobs:
             dockerfile: extensions/teams-bot/Dockerfile
           - name: agent-dashboard
             dockerfile: extensions/agent-dashboard/Dockerfile
+          - name: webhook-ingress
+            dockerfile: extensions/webhook-ingress/Dockerfile
 
     env:
       IMAGE_REF: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ github.sha }}

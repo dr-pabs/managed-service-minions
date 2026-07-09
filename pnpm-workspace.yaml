@@ -3,3 +3,9 @@ packages:
   - 'extensions/*'
   - 'infra'
   - 'test'
+
+# better-sqlite3 (native addon) and esbuild (platform binary) must run their
+# install scripts or the toolshed store and bundling break at runtime.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

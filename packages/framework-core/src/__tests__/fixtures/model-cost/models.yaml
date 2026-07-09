@@ -1,0 +1,27 @@
+# Deterministic fixture for model-cost.test.ts -- NOT the real rules/models.yaml.
+tiers:
+  fast:
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 4096
+    price_per_1k_tokens_usd: 0.001
+
+  reasoning:
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 16384
+    price_per_1k_tokens_usd: 0.01
+
+  unpriced:
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 8192
+    # price_per_1k_tokens_usd deliberately omitted -- must default to 0.
+
+agents:
+  ticket-analyst:
+    tier: fast
+    budget: 10000
+  code-writer:
+    tier: reasoning
+    budget: 50000

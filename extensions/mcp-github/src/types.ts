@@ -31,6 +31,18 @@ export const mergePullRequestInputSchema = pullNumberInputSchema.extend({
 });
 export type MergePullRequestInput = z.infer<typeof mergePullRequestInputSchema>;
 
+/**
+ * PRs are issues in GitHub's REST API, so a PR comment is created via the
+ * issues endpoint (`POST /repos/{owner}/{repo}/issues/{issue_number}/comments`)
+ * -- `issue_number` and `pull_number` are the same integer for a PR
+ * (Milestone 15, F11: the webhook-ingress reply path).
+ */
+export const createIssueCommentInputSchema = ownerRepoSchema.extend({
+  issue_number: z.number().int().min(1),
+  body: z.string().min(1),
+});
+export type CreateIssueCommentInput = z.infer<typeof createIssueCommentInputSchema>;
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
@@ -66,4 +78,10 @@ export interface MergeResult {
   sha: string;
   merged: boolean;
   message: string;
+}
+
+export interface IssueComment {
+  id: number;
+  body: string;
+  html_url: string;
 }

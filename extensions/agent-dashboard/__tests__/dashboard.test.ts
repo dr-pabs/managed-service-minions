@@ -40,7 +40,7 @@ describe('startDashboardServer', () => {
     expect(response.status).toBe(200);
     expect(response.contentType).toContain('text/html');
     expect(response.body as string).toContain('<!doctype html>');
-    expect(response.body as string).toContain('Goose Agent Dashboard');
+    expect(response.body as string).toContain('Minions Agent Dashboard');
   });
 
   it('returns ok from /health', async () => {
@@ -121,6 +121,62 @@ describe('startDashboardServer', () => {
     expect(response.body).toHaveLength(1);
   });
 
+  it('scopes /sessions to a teamId query param when given (ADR-022 multi-tenancy)', async () => {
+    store.createSession({
+      id: 's1',
+      teamId: 'team-a',
+      platform: 'slack',
+      userId: 'u1',
+      correlationRoot: 'corr_1',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.createSession({
+      id: 's2',
+      teamId: 'team-b',
+      platform: 'slack',
+      userId: 'u2',
+      correlationRoot: 'corr_2',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const scoped = await get(server.port, '/sessions?teamId=team-a');
+    expect(scoped.status).toBe(200);
+    expect(scoped.body).toEqual([expect.objectContaining({ id: 's1' })]);
+
+    const unscoped = await get(server.port, '/sessions');
+    expect(unscoped.body).toHaveLength(2);
+  });
+
+  it('scopes /sessions/:id/minion-runs to a teamId query param when given (ADR-022 multi-tenancy)', async () => {
+    store.createSession({
+      id: 's1',
+      teamId: 'team-a',
+      platform: 'slack',
+      userId: 'u1',
+      correlationRoot: 'corr_1',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.createMinionRun({
+      id: 'r1',
+      sessionId: 's1',
+      minionType: 'code-explorer',
+      correlationId: 'corr_1',
+      status: 'completed',
+      createdAt: 1,
+      completedAt: 2,
+    });
+
+    const wrongTeam = await get(server.port, '/sessions/s1/minion-runs?teamId=team-b');
+    expect(wrongTeam.status).toBe(200);
+    expect(wrongTeam.body).toEqual([]);
+
+    const rightTeam = await get(server.port, '/sessions/s1/minion-runs?teamId=team-a');
+    expect(rightTeam.body).toHaveLength(1);
+  });
+
   it('returns a correlation tree', async () => {
     store.createMinionRun({
       id: 'r1',
@@ -141,12 +197,14 @@ describe('startDashboardServer', () => {
     store.createApproval({
       id: 'a1',
       sessionId: 's1',
+      teamId: 'team-a',
       correlationId: 'corr_1',
       serverAlias: 'github',
       toolName: 'github_merge_pull_request',
       paramsJson: '{}',
       requestedAt: 1,
       timeoutAt: 2,
+      requestHash: 'hash_1',
     });
 
     const response = await get(server.port, '/pending-approvals');

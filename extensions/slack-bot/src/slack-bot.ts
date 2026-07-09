@@ -54,7 +54,11 @@ function toSlackRequest(
   const teamId = event.team ?? 'unknown';
   const channelId = event.channel ?? undefined;
   const userId = ('user' in event && event.user ? event.user : 'unknown') as string;
-  const threadId = event.thread_ts ?? event.channel ?? undefined;
+  // M3 (review) fix: a non-threaded channel message must start its OWN
+  // thread-session keyed by its own timestamp — never fall back to the bare
+  // channel id, or every non-threaded message in a channel would collapse
+  // into one shared, never-ending session.
+  const threadId = event.thread_ts ?? event.ts ?? undefined;
 
   return {
     platform: 'slack',

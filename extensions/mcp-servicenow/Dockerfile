@@ -15,8 +15,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY extensions/mcp-servicenow ./extensions/mcp-servicenow
 
-RUN pnpm --filter "@goose-agent-framework/mcp-servicenow" build \
-    && pnpm --filter "@goose-agent-framework/mcp-servicenow" deploy --prod --legacy /prod
+RUN pnpm --filter "@minions-agent-framework/mcp-servicenow" build \
+    && pnpm --filter "@minions-agent-framework/mcp-servicenow" deploy --prod --legacy /prod
 
 FROM node:22-bookworm-slim
 

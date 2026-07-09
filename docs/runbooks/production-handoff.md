@@ -1,6 +1,6 @@
 # Production Handoff Runbook
 
-> **Scope:** Pre-launch checklist, sign-off, and post-launch support model for Goose Agent Framework v1.  
+> **Scope:** Pre-launch checklist, sign-off, and post-launch support model for Minions Agent Framework v1.  
 > **Audience:** Engineering lead, platform operator, security reviewer, and product owner.
 
 ---

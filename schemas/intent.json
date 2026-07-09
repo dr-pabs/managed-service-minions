@@ -20,7 +20,7 @@
     },
     "platform": {
       "type": "string",
-      "enum": ["slack", "teams", "cli", "dashboard"]
+      "enum": ["slack", "teams", "cli", "dashboard", "webhook"]
     },
     "entities": {
       "type": "object",

@@ -1,0 +1,15 @@
+{
+  "_comment": "Recorded/example POST {baseUrl}/reply request+response pair for a single minion turn (code_explorer). NOT captured against a live goose serve process (none was available in this environment) -- see extensions/orchestrator/README.md for how to record a real one and replace this fixture.",
+  "request": {
+    "messages": [
+      { "role": "system", "content": "# Code Explorer\n\n## Identity\n- Role: code-explorer..." },
+      { "role": "user", "content": "User request: review PR #1" }
+    ],
+    "session_id": "sess_T1:slack:ts1",
+    "correlation_id": "corr_root1.0"
+  },
+  "response": {
+    "role": "assistant",
+    "content": "{\"summary\":\"Explored PR #1\",\"files_examined\":[\"src/index.ts\"]}"
+  }
+}

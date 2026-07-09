@@ -5,6 +5,16 @@ export interface RateLimitResult {
 
 export interface RateLimiter {
   canExecute(key: string, now?: number): RateLimitResult;
+  /**
+   * Same token-bucket algorithm as `canExecute`, but the caller supplies the
+   * limit to enforce for this key instead of the limiter's single
+   * constructor-configured limit (H4 fix). This lets one `RateLimiter`
+   * instance back multiple buckets with different limits — e.g. a
+   * per-server bucket (`server:github`, limit from `governance.rateLimits`)
+   * and the existing fine-grained per-tool bucket (`team:minion:server:tool`,
+   * the `default` limit) — without needing a limiter-per-config-entry.
+   */
+  canExecuteWithLimit(key: string, limit: RateLimitConfig, now?: number): RateLimitResult;
 }
 
 export interface RateLimitConfig {
@@ -23,8 +33,12 @@ export class TokenBucketRateLimiter implements RateLimiter {
   constructor(private readonly config: RateLimitConfig) {}
 
   canExecute(key: string, now = Date.now()): RateLimitResult {
-    const capacity = this.config.burst;
-    const refillRatePerMs = this.config.requestsPerMinute / 60_000;
+    return this.canExecuteWithLimit(key, this.config, now);
+  }
+
+  canExecuteWithLimit(key: string, limit: RateLimitConfig, now = Date.now()): RateLimitResult {
+    const capacity = limit.burst;
+    const refillRatePerMs = limit.requestsPerMinute / 60_000;
 
     let bucket = this.buckets.get(key);
     if (!bucket) {
@@ -38,7 +52,7 @@ export class TokenBucketRateLimiter implements RateLimiter {
 
     if (bucket.tokens < 1) {
       const deficit = 1 - bucket.tokens;
-      const retryAfterSeconds = Math.max(1, Math.ceil(deficit / (this.config.requestsPerMinute / 60)));
+      const retryAfterSeconds = Math.max(1, Math.ceil(deficit / (limit.requestsPerMinute / 60)));
       this.buckets.set(key, bucket);
       return { allowed: false, retryAfterSeconds };
     }

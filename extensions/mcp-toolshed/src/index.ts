@@ -1,6 +1,10 @@
-export { startToolshedServer, type McpServerAdapter } from './server.js';
+export { startToolshedServer, buildToolshedState, type McpServerAdapter } from './server.js';
+export { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
 export {
   executeTool,
+  verifyAndExecuteTool,
+  resolveApprovalRecord,
+  computeRequestHash,
   initializeToolshed,
   resetToolshed,
   getToolshedState,
@@ -8,6 +12,7 @@ export {
   type ToolContext,
   type ToolResult,
   type ToolshedState,
+  type MinionIdentityInput,
 } from './toolshed.js';
 export {
   createSqliteStore,
@@ -24,9 +29,15 @@ export {
   isDestructive,
   isToolAllowed,
   isPathAllowed,
+  getCachePolicy,
   type AllowlistConfig,
   type GovernanceConfig,
 } from './config.js';
+export {
+  validateConfigAtRoot,
+  ORCHESTRATOR_EXEMPTION,
+  type ValidationResult,
+} from './config-validation.js';
 export {
   CircuitBreaker,
   type CircuitBreakerConfig,
@@ -46,7 +57,14 @@ export {
   type ToolDefinition,
   type McpAdapterConfig,
 } from './adapter.js';
-export { createAzureTableAuditLogger, type AuditLogger } from './cloud-audit.js';
+export {
+  createAzureTableAuditLogger,
+  createRetryingAuditLogger,
+  type AuditLogger,
+  type RetryingAuditLogger,
+  type RetryingAuditLoggerOptions,
+} from './cloud-audit.js';
+export { redactSecrets, redactValue } from './redact.js';
 export {
   FileSystemArtifactStore,
   AzureBlobArtifactStore,
@@ -54,3 +72,8 @@ export {
   createInMemoryArtifactStore,
   type ArtifactStore,
 } from './artifact-store.js';
+export {
+  watchRules,
+  type WatchRulesOptions,
+  type WatchRulesHandle,
+} from './hot-reload.js';

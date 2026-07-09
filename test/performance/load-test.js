@@ -1,7 +1,7 @@
 /* eslint-disable no-undef */
 
 /**
- * Minimal k6 load-test skeleton for the Goose Agent Framework.
+ * Minimal k6 load-test skeleton for the Minions Agent Framework.
  *
  * Run locally with:
  *   k6 run -e BASE_URL=https://localhost:3001 test/performance/load-test.js

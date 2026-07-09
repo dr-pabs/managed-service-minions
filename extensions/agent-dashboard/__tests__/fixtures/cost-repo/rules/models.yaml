@@ -1,0 +1,7 @@
+# Deterministic fixture for dashboard-cost.test.ts -- NOT the real rules/models.yaml.
+tiers:
+  fast:
+    deployment: ""
+    provider: ""
+    max_tokens_per_call: 4096
+    price_per_1k_tokens_usd: 0.001

@@ -1,11 +1,10 @@
 {
-  "name": "goose-agent-framework",
+  "name": "minions-agent-framework",
   "version": "0.2.0",
-  "description": "Multi-agent orchestration framework for engineering operations. Includes orchestrator and minion agents, intent/task/result skills, review recipes, and governance rules.",
-  "repository": "https://github.com/dr-pabs/Minions",
+  "description": "Minions Agent Framework: multi-agent orchestration for engineering operations. Includes orchestrator and minion agents, intent/task/result skills, review recipes, and governance rules.",
+  "repository": "https://github.com/dr-pabs/managed-service-minions",
   "agents": "./agents/",
   "skills": "./skills/",
   "commands": "./commands/",
-  "rules": "./rules/",
-  "hooks": "./hooks/hooks.json"
+  "rules": "./rules/"
 }
