@@ -6,6 +6,7 @@ import type {
   PendingApproval,
   AuditEntry,
 } from 'framework-core';
+import { resolveSessionTtlHours } from 'framework-core';
 
 export { type SessionStore, type Session, type MinionRun, type PendingApproval, type AuditEntry };
 
@@ -22,6 +23,7 @@ interface CacheRow {
 
 export function createMemoryStore(now: () => number = Date.now): SessionStore {
   const sessions = new Map<string, Session>();
+  const sessionArchive: Session[] = [];
   const runs = new Map<string, MinionRun>();
   const approvals = new Map<string, PendingApproval>();
   const auditLog = new Map<string, AuditEntry>();
@@ -34,8 +36,32 @@ export function createMemoryStore(now: () => number = Date.now): SessionStore {
     getSession(id: string): Session | undefined {
       return sessions.get(id);
     },
-    listSessions(): Session[] {
-      return Array.from(sessions.values());
+    updateSession(id: string, patch: Partial<Session>): void {
+      const existing = sessions.get(id);
+      if (existing) {
+        sessions.set(id, { ...existing, ...patch });
+      }
+    },
+    listSessions(teamId?: string): Session[] {
+      const all = Array.from(sessions.values());
+      return teamId === undefined ? all : all.filter((session) => session.teamId === teamId);
+    },
+    /**
+     * Blob/transcript archival (e.g. full conversation history in blob
+     * storage) is explicitly deferred (Milestone 9) — only the `Session` row
+     * itself moves out of the live map and into `sessionArchive`.
+     */
+    expireSessions(expireNow: number): void {
+      const ttlMs = resolveSessionTtlHours() * 60 * 60 * 1000;
+      for (const [id, session] of sessions) {
+        if (expireNow - session.updatedAt > ttlMs) {
+          sessionArchive.push(session);
+          sessions.delete(id);
+        }
+      }
+    },
+    listSessionArchive(): Session[] {
+      return sessionArchive.slice();
     },
     createMinionRun(run: MinionRun): void {
       runs.set(run.id, run);
@@ -46,8 +72,11 @@ export function createMemoryStore(now: () => number = Date.now): SessionStore {
         runs.set(id, { ...existing, ...patch });
       }
     },
-    listMinionRunsBySession(sessionId: string): MinionRun[] {
-      return Array.from(runs.values()).filter((run) => run.sessionId === sessionId);
+    listMinionRunsBySession(sessionId: string, teamId?: string): MinionRun[] {
+      const matches = Array.from(runs.values()).filter((run) => run.sessionId === sessionId);
+      if (teamId === undefined) return matches;
+      const session = sessions.get(sessionId);
+      return session && session.teamId === teamId ? matches : [];
     },
     listMinionRunsByCorrelationRoot(root: string): MinionRun[] {
       return Array.from(runs.values()).filter((run) => run.correlationId === root);
@@ -283,6 +312,28 @@ function migrateApprovalTeamIdColumn(db: BetterSqlite3Database): void {
   }
 }
 
+/**
+ * Additive, guarded migration: creates the `sessions_archive` table if
+ * missing (Milestone 9 — `expireSessions` moves idle-past-TTL rows here
+ * rather than deleting them). Same shape as `sessions` plus an
+ * `archived_at` column recording when the archival happened. Blob/transcript
+ * archival is explicitly deferred — only the `Session` row itself is copied.
+ */
+function migrateSessionsArchiveTable(db: BetterSqlite3Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions_archive (
+      id TEXT PRIMARY KEY,
+      team_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      correlation_root TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER NOT NULL
+    );
+  `);
+}
+
 function initializeSchema(db: BetterSqlite3Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -357,6 +408,7 @@ function initializeSchema(db: BetterSqlite3Database): void {
   migrateApprovalApproverColumns(db);
   migrateApprovalRequestHashColumns(db);
   migrateApprovalTeamIdColumn(db);
+  migrateSessionsArchiveTable(db);
 }
 
 function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number): SessionStore {
@@ -366,6 +418,15 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
   );
   const selectSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
   const selectAllSessions = db.prepare('SELECT * FROM sessions');
+  const selectAllSessionsByTeam = db.prepare('SELECT * FROM sessions WHERE team_id = ?');
+  const updateSessionStmt = db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?');
+  const selectExpiredSessions = db.prepare('SELECT * FROM sessions WHERE ? - updated_at > ?');
+  const deleteSession = db.prepare('DELETE FROM sessions WHERE id = ?');
+  const insertSessionArchive = db.prepare(
+    `INSERT INTO sessions_archive (id, team_id, platform, user_id, correlation_root, created_at, updated_at, archived_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const selectSessionArchive = db.prepare('SELECT * FROM sessions_archive');
   const insertRun = db.prepare(
     `INSERT INTO minion_runs (id, session_id, minion_type, correlation_id, status, result_json, tokens_used, created_at, completed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -419,8 +480,47 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
       const row = selectSession.get(id) as Record<string, unknown> | undefined;
       return row ? rowToSession(row) : undefined;
     },
-    listSessions(): Session[] {
-      const rows = selectAllSessions.all() as Record<string, unknown>[];
+    /**
+     * Only `updatedAt` is ever patched today (Milestone 9's "touch on every
+     * message" contract); the statement is intentionally narrow rather than
+     * a general column-by-column patch to avoid dead branches for fields
+     * nothing calls with.
+     */
+    updateSession(id: string, patch: Partial<Session>): void {
+      const existing = selectSession.get(id) as Record<string, unknown> | undefined;
+      if (!existing || patch.updatedAt === undefined) return;
+      updateSessionStmt.run(patch.updatedAt, id);
+    },
+    listSessions(teamId?: string): Session[] {
+      const rows = (
+        teamId === undefined ? selectAllSessions.all() : selectAllSessionsByTeam.all(teamId)
+      ) as Record<string, unknown>[];
+      return rows.map(rowToSession);
+    },
+    /**
+     * Blob/transcript archival is explicitly deferred (Milestone 9) — only
+     * the `Session` row itself moves from `sessions` to `sessions_archive`.
+     */
+    expireSessions(expireNow: number): void {
+      const ttlMs = resolveSessionTtlHours() * 60 * 60 * 1000;
+      const rows = selectExpiredSessions.all(expireNow, ttlMs) as Record<string, unknown>[];
+      for (const row of rows) {
+        const session = rowToSession(row);
+        insertSessionArchive.run(
+          session.id,
+          session.teamId,
+          session.platform,
+          session.userId,
+          session.correlationRoot,
+          session.createdAt,
+          session.updatedAt,
+          expireNow
+        );
+        deleteSession.run(session.id);
+      }
+    },
+    listSessionArchive(): Session[] {
+      const rows = selectSessionArchive.all() as Record<string, unknown>[];
       return rows.map(rowToSession);
     },
     createMinionRun(run: MinionRun): void {
@@ -447,7 +547,13 @@ function createSqliteSessionStore(db: BetterSqlite3Database, now: () => number):
         id
       );
     },
-    listMinionRunsBySession(sessionId: string): MinionRun[] {
+    listMinionRunsBySession(sessionId: string, teamId?: string): MinionRun[] {
+      if (teamId !== undefined) {
+        const session = selectSession.get(sessionId) as Record<string, unknown> | undefined;
+        if (!session || String(session.team_id) !== teamId) {
+          return [];
+        }
+      }
       const rows = selectRunsBySession.all(sessionId) as Record<string, unknown>[];
       return rows.map(rowToMinionRun);
     },

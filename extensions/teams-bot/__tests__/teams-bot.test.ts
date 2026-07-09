@@ -51,7 +51,10 @@ function makeStore(): SessionStore {
   return {
     createSession: jest.fn(),
     getSession: jest.fn().mockReturnValue(undefined),
+    updateSession: jest.fn(),
     listSessions: jest.fn(),
+    expireSessions: jest.fn(),
+    listSessionArchive: jest.fn(),
     createMinionRun: jest.fn(),
     updateMinionRun: jest.fn(),
     listMinionRunsBySession: jest.fn(),

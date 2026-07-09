@@ -23,7 +23,10 @@ function makeStore(): SessionStore {
   return {
     createSession: jest.fn(),
     getSession: jest.fn().mockReturnValue(undefined),
+    updateSession: jest.fn(),
     listSessions: jest.fn(),
+    expireSessions: jest.fn(),
+    listSessionArchive: jest.fn(),
     createMinionRun: jest.fn(),
     updateMinionRun: jest.fn(),
     listMinionRunsBySession: jest.fn(),
@@ -163,6 +166,38 @@ describe('createSlackBot', () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ thread_ts: 'ts-root' })
+    );
+  });
+
+  it('uses the message own ts (not the channel) as threadId for a non-threaded channel message', async () => {
+    createSlackBot(app as unknown as BoltApp, store, runner, {
+      signingSecret: 'secret',
+      token: 'token',
+    });
+
+    await app.eventHandlers['app_mention']({
+      event: {
+        type: 'app_mention',
+        text: '<@U123> help',
+        team: 'T1',
+        channel: 'C1',
+        user: 'U42',
+        ts: 'ts-root',
+        // no thread_ts: a bare, non-threaded channel message must key its
+        // OWN session by its own ts, never by the shared channel id (M3
+        // review finding — the old `event.thread_ts ?? event.channel`
+        // fallback made every non-threaded message in a channel share one
+        // session forever).
+      },
+      say,
+      client,
+    });
+
+    expect(runner.run).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'ts-root' })
+    );
+    expect(runner.run).not.toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'C1' })
     );
   });
 

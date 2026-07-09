@@ -842,6 +842,192 @@ describe('store', () => {
       });
     });
 
+    describe('sessions real SQL semantics (fake in-memory engine)', () => {
+      // Same spirit as the tool_call_cache fake engine above: a tiny fake SQL
+      // engine understanding only the sessions/sessions_archive statements
+      // store.ts issues, exercising the real expireSessions/updateSession/
+      // teamId-scoping *logic* without a native better-sqlite3 dependency.
+      interface SessionRow {
+        id: string;
+        team_id: string;
+        platform: string;
+        user_id: string;
+        correlation_root: string;
+        created_at: number;
+        updated_at: number;
+      }
+
+      function createFakeSessionsDatabaseCtor() {
+        const sessionsTable = new Map<string, SessionRow>();
+        const archiveTable: Array<SessionRow & { archived_at: number }> = [];
+
+        const FakeDatabase = jest.fn().mockImplementation(() => ({
+          exec: jest.fn(),
+          prepare: jest.fn((sql: string) => ({
+            run: jest.fn((...params: unknown[]) => {
+              if (sql.startsWith('INSERT INTO sessions (')) {
+                const [id, team_id, platform, user_id, correlation_root, created_at, updated_at] =
+                  params as [string, string, string, string, string, number, number];
+                sessionsTable.set(id, { id, team_id, platform, user_id, correlation_root, created_at, updated_at });
+              } else if (sql.startsWith('UPDATE sessions SET updated_at')) {
+                const [updated_at, id] = params as [number, string];
+                const row = sessionsTable.get(id);
+                if (row) row.updated_at = updated_at;
+              } else if (sql.startsWith('DELETE FROM sessions')) {
+                const [id] = params as [string];
+                sessionsTable.delete(id);
+              } else if (sql.startsWith('INSERT INTO sessions_archive')) {
+                const [id, team_id, platform, user_id, correlation_root, created_at, updated_at, archived_at] =
+                  params as [string, string, string, string, string, number, number, number];
+                archiveTable.push({ id, team_id, platform, user_id, correlation_root, created_at, updated_at, archived_at });
+              }
+              return { changes: 1 };
+            }),
+            get: jest.fn((...params: unknown[]) => {
+              if (sql === 'PRAGMA table_info(tool_call_cache)') return undefined;
+              if (sql === 'PRAGMA table_info(pending_approvals)') return undefined;
+              if (sql === 'SELECT * FROM sessions WHERE id = ?') {
+                const [id] = params as [string];
+                return sessionsTable.get(id);
+              }
+              return undefined;
+            }),
+            all: jest.fn((...params: unknown[]) => {
+              if (sql === 'PRAGMA table_info(tool_call_cache)') return [];
+              if (sql === 'PRAGMA table_info(pending_approvals)') return [];
+              if (sql === 'SELECT * FROM sessions') {
+                return Array.from(sessionsTable.values());
+              }
+              if (sql === 'SELECT * FROM sessions WHERE team_id = ?') {
+                const [teamId] = params as [string];
+                return Array.from(sessionsTable.values()).filter((row) => row.team_id === teamId);
+              }
+              if (sql === 'SELECT * FROM sessions WHERE ? - updated_at > ?') {
+                const [expireNow, ttlMs] = params as [number, number];
+                return Array.from(sessionsTable.values()).filter(
+                  (row) => expireNow - row.updated_at > ttlMs
+                );
+              }
+              if (sql === 'SELECT * FROM sessions_archive') {
+                return archiveTable.slice();
+              }
+              return [];
+            }),
+          })),
+          close: jest.fn(),
+        }));
+        return { FakeDatabase, sessionsTable, archiveTable };
+      }
+
+      it('updateSession patches updated_at on the live row', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+
+        store.updateSession('s1', { updatedAt: 42 });
+
+        expect(store.getSession('s1')).toMatchObject({ updatedAt: 42 });
+      });
+
+      it('updateSession is a no-op for a missing session', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        expect(() => store.updateSession('missing', { updatedAt: 42 })).not.toThrow();
+      });
+
+      it('updateSession is a no-op when the patch omits updatedAt', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+
+        store.updateSession('s1', {});
+
+        expect(store.getSession('s1')).toMatchObject({ updatedAt: 1 });
+      });
+
+      it('scopes listSessions to one team (ADR-022 multi-tenancy)', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        store.createSession({
+          id: 's2',
+          teamId: 'team-b',
+          platform: 'slack',
+          userId: 'u2',
+          correlationRoot: 'corr_2',
+          createdAt: 1,
+          updatedAt: 1,
+        });
+
+        expect(store.listSessions('team-a')).toEqual([expect.objectContaining({ id: 's1' })]);
+        expect(store.listSessions()).toHaveLength(2);
+      });
+
+      it('expireSessions archives idle-past-TTL rows: gone from listSessions, present in the archive', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        store.createSession({
+          id: 'stale',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_stale',
+          createdAt: 0,
+          updatedAt: 0,
+        });
+
+        const cutoffNow = 72 * 60 * 60 * 1000 + 1;
+        store.expireSessions(cutoffNow);
+
+        expect(store.getSession('stale')).toBeUndefined();
+        expect(store.listSessions()).toHaveLength(0);
+        expect(store.listSessionArchive()).toEqual([expect.objectContaining({ id: 'stale' })]);
+      });
+
+      it('does not archive a session still within the TTL', () => {
+        const { FakeDatabase } = createFakeSessionsDatabaseCtor();
+        const store = createSqliteStore(':memory:', FakeDatabase as unknown as DatabaseCtor);
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 0,
+          updatedAt: 0,
+        });
+
+        store.expireSessions(60 * 60 * 1000);
+
+        expect(store.getSession('s1')).toBeDefined();
+        expect(store.listSessionArchive()).toHaveLength(0);
+      });
+    });
+
     it('lists sessions', () => {
       const prepared = createStatement({
         all: jest.fn().mockReturnValue([
@@ -1101,6 +1287,65 @@ describe('store', () => {
       });
     });
 
+    it('scopes listMinionRunsBySession to one team (ADR-022 multi-tenancy)', () => {
+      const sessionRow = {
+        id: 's1',
+        team_id: 'team-a',
+        platform: 'slack',
+        user_id: 'u1',
+        correlation_root: 'corr_1',
+        created_at: 1,
+        updated_at: 1,
+      };
+      const runRow = {
+        id: 'r1',
+        session_id: 's1',
+        minion_type: 'code-explorer',
+        correlation_id: 'corr_1',
+        status: 'completed',
+        result_json: null,
+        tokens_used: null,
+        created_at: 1,
+        completed_at: null,
+      };
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn((sql: string) => {
+          if (sql === 'SELECT * FROM sessions WHERE id = ?') {
+            return createStatement({ get: jest.fn().mockReturnValue(sessionRow) as unknown as Statement['get'] });
+          }
+          if (sql === 'SELECT * FROM minion_runs WHERE session_id = ?') {
+            return createStatement({ all: jest.fn().mockReturnValue([runRow]) as unknown as Statement['all'] });
+          }
+          return createStatement();
+        }),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      expect(store.listMinionRunsBySession('s1', 'team-b')).toHaveLength(0);
+      expect(store.listMinionRunsBySession('s1', 'team-a')).toHaveLength(1);
+      expect(store.listMinionRunsBySession('s1')).toHaveLength(1);
+    });
+
+    it('listMinionRunsBySession returns empty for an unknown session when teamId is given', () => {
+      const db = {
+        exec: jest.fn(),
+        prepare: jest.fn((sql: string) => {
+          if (sql === 'SELECT * FROM sessions WHERE id = ?') {
+            return createStatement({ get: jest.fn().mockReturnValue(undefined) as unknown as Statement['get'] });
+          }
+          return createStatement();
+        }),
+        close: jest.fn(),
+      };
+      const DatabaseCtor = jest.fn().mockReturnValue(db) as unknown as DatabaseCtor;
+
+      const store = createSqliteStore(':memory:', DatabaseCtor);
+      expect(store.listMinionRunsBySession('missing', 'team-a')).toHaveLength(0);
+    });
+
     it('maps null optional fields to undefined', () => {
       const prepared = createStatement({
         all: jest.fn().mockReturnValue([
@@ -1213,6 +1458,32 @@ describe('store', () => {
       expect(store.listSessions()).toHaveLength(1);
     });
 
+    it('scopes listSessions to one team (ADR-022 multi-tenancy)', () => {
+      const store = createMemoryStore();
+      store.createSession({
+        id: 's1',
+        teamId: 'team-a',
+        platform: 'slack',
+        userId: 'u1',
+        correlationRoot: 'corr_1',
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      store.createSession({
+        id: 's2',
+        teamId: 'team-b',
+        platform: 'slack',
+        userId: 'u2',
+        correlationRoot: 'corr_2',
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      expect(store.listSessions('team-a')).toEqual([expect.objectContaining({ id: 's1' })]);
+      expect(store.listSessions('team-b')).toEqual([expect.objectContaining({ id: 's2' })]);
+      expect(store.listSessions()).toHaveLength(2);
+    });
+
     it('lists minion runs by session', () => {
       const store = createMemoryStore();
       store.createMinionRun({
@@ -1225,6 +1496,127 @@ describe('store', () => {
       });
       expect(store.listMinionRunsBySession('s1')).toHaveLength(1);
       expect(store.listMinionRunsBySession('other')).toHaveLength(0);
+    });
+
+    it('scopes listMinionRunsBySession to one team (ADR-022 multi-tenancy)', () => {
+      const store = createMemoryStore();
+      store.createSession({
+        id: 's1',
+        teamId: 'team-a',
+        platform: 'slack',
+        userId: 'u1',
+        correlationRoot: 'corr_1',
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      store.createMinionRun({
+        id: 'r1',
+        sessionId: 's1',
+        minionType: 'code-explorer',
+        correlationId: 'corr_1',
+        status: 'completed',
+        createdAt: 1,
+      });
+
+      // A caller in another tenant guessing/enumerating session id 's1' gets
+      // nothing back, even though the run really exists.
+      expect(store.listMinionRunsBySession('s1', 'team-b')).toHaveLength(0);
+      expect(store.listMinionRunsBySession('s1', 'team-a')).toHaveLength(1);
+      expect(store.listMinionRunsBySession('s1')).toHaveLength(1);
+    });
+
+    it('updateSession patches an existing session and is a no-op for a missing one', () => {
+      const store = createMemoryStore();
+      store.createSession({
+        id: 's1',
+        teamId: 'team-a',
+        platform: 'slack',
+        userId: 'u1',
+        correlationRoot: 'corr_1',
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      store.updateSession('s1', { updatedAt: 42 });
+      expect(store.getSession('s1')).toMatchObject({ updatedAt: 42 });
+
+      expect(() => store.updateSession('missing', { updatedAt: 99 })).not.toThrow();
+      expect(store.getSession('missing')).toBeUndefined();
+    });
+
+    describe('expireSessions', () => {
+      it('archives sessions idle past the TTL — gone from listSessions, present in the archive', () => {
+        const store = createMemoryStore();
+        store.createSession({
+          id: 'stale',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_stale',
+          createdAt: 0,
+          updatedAt: 0,
+        });
+        store.createSession({
+          id: 'fresh',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_fresh',
+          createdAt: 0,
+          updatedAt: 0,
+        });
+        // Touch the fresh one forward so only 'stale' is idle past 72h.
+        store.updateSession('fresh', { updatedAt: 72 * 60 * 60 * 1000 });
+
+        const cutoffNow = 72 * 60 * 60 * 1000 + 1;
+        store.expireSessions(cutoffNow);
+
+        expect(store.getSession('stale')).toBeUndefined();
+        expect(store.listSessions()).toEqual([expect.objectContaining({ id: 'fresh' })]);
+        expect(store.listSessionArchive()).toEqual([expect.objectContaining({ id: 'stale' })]);
+      });
+
+      it('does not archive a session still within the TTL', () => {
+        const store = createMemoryStore();
+        store.createSession({
+          id: 's1',
+          teamId: 'team-a',
+          platform: 'slack',
+          userId: 'u1',
+          correlationRoot: 'corr_1',
+          createdAt: 0,
+          updatedAt: 0,
+        });
+
+        store.expireSessions(60 * 60 * 1000); // 1 hour later, well within 72h TTL
+
+        expect(store.getSession('s1')).toBeDefined();
+        expect(store.listSessionArchive()).toHaveLength(0);
+      });
+
+      it('honors a SESSION_TTL_HOURS override', () => {
+        const originalTtl = process.env.SESSION_TTL_HOURS;
+        process.env.SESSION_TTL_HOURS = '1';
+        try {
+          const store = createMemoryStore();
+          store.createSession({
+            id: 's1',
+            teamId: 'team-a',
+            platform: 'slack',
+            userId: 'u1',
+            correlationRoot: 'corr_1',
+            createdAt: 0,
+            updatedAt: 0,
+          });
+
+          store.expireSessions(2 * 60 * 60 * 1000); // 2 hours later, past a 1-hour TTL
+
+          expect(store.getSession('s1')).toBeUndefined();
+        } finally {
+          if (originalTtl === undefined) delete process.env.SESSION_TTL_HOURS;
+          else process.env.SESSION_TTL_HOURS = originalTtl;
+        }
+      });
     });
 
     it('lists minion runs by correlation root', () => {

@@ -220,6 +220,18 @@ function jsonResponse(res: http.ServerResponse, statusCode: number, body: unknow
   res.end(payload);
 }
 
+/**
+ * Reads an optional `teamId` query param (ADR-022 multi-tenancy, Milestone
+ * 9). Returns `undefined` when absent so every scoped store call falls
+ * through to its pre-Milestone-9 "list everything" default.
+ */
+function readTeamIdParam(req: http.IncomingMessage): string | undefined {
+  // req.url is always set by the time a route handler runs — the dispatcher
+  // above has already parsed it once to match the route.
+  const url = new URL(req.url as string, 'http://localhost');
+  return url.searchParams.get('teamId') ?? undefined;
+}
+
 function htmlResponse(res: http.ServerResponse, html: string): void {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -254,8 +266,8 @@ export async function startDashboardServer(
     {
       method: 'GET',
       pattern: /^\/sessions$/,
-      handler: async (_req, res) => {
-        jsonResponse(res, 200, store.listSessions());
+      handler: async (req, res) => {
+        jsonResponse(res, 200, store.listSessions(readTeamIdParam(req)));
       },
     },
     {
@@ -272,8 +284,8 @@ export async function startDashboardServer(
     {
       method: 'GET',
       pattern: /^\/sessions\/([^/]+)\/minion-runs$/,
-      handler: async (_req, res, matches) => {
-        jsonResponse(res, 200, store.listMinionRunsBySession(matches[1]));
+      handler: async (req, res, matches) => {
+        jsonResponse(res, 200, store.listMinionRunsBySession(matches[1], readTeamIdParam(req)));
       },
     },
     {

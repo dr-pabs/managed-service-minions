@@ -81,10 +81,35 @@ export interface AuditEntry {
 export interface SessionStore {
   createSession(session: Session): void;
   getSession(id: string): Session | undefined;
-  listSessions(): Session[];
+  /** Patches an existing session (Milestone 9 — used to touch `updatedAt` on every message). */
+  updateSession(id: string, patch: Partial<Session>): void;
+  /**
+   * Optionally scoped to one team (Milestone 9, ADR-022 multi-tenancy) so a
+   * dashboard call cannot leak another tenant's sessions. Omitting `teamId`
+   * preserves the pre-Milestone-9 "list everything" behavior for existing
+   * callers/tests.
+   */
+  listSessions(teamId?: string): Session[];
+  /**
+   * Archives sessions idle past `SESSION_TTL_HOURS` as of `now` (Milestone 9,
+   * M3 review / F14). Implementations move expired rows out of the live
+   * `sessions` table into an archive (SQLite: `sessions_archive`; memory
+   * store: a parallel archive Map) so `listSessions` never returns them again
+   * but the record is not destroyed. Blob/transcript archival is explicitly
+   * OUT of scope here — only the `Session` row itself is archived.
+   */
+  expireSessions(now: number): void;
+  /** Rows moved out of the live `sessions` table by `expireSessions` (Milestone 9). Blob/transcript archival is out of scope — only the `Session` row itself is preserved here. */
+  listSessionArchive(): Session[];
   createMinionRun(run: MinionRun): void;
   updateMinionRun(id: string, patch: Partial<MinionRun>): void;
-  listMinionRunsBySession(sessionId: string): MinionRun[];
+  /**
+   * Optionally scoped to one team (Milestone 9, ADR-022 multi-tenancy) — a
+   * defense-in-depth check beyond the sessionId itself, so a caller who
+   * guesses/enumerates another tenant's session id still gets nothing back.
+   * Omitting `teamId` preserves pre-Milestone-9 behavior.
+   */
+  listMinionRunsBySession(sessionId: string, teamId?: string): MinionRun[];
   listMinionRunsByCorrelationRoot(root: string): MinionRun[];
   createApproval(approval: PendingApproval): void;
   getApproval(id: string): PendingApproval | undefined;
