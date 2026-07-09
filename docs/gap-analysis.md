@@ -41,9 +41,9 @@
 | Question | Answer |
 |---|---|
 | Max concurrent minions per orchestrator replica | Bounded by Goose delegate pool. Estimated 10-20 per replica. |
-| Max sessions per minute | Bounded by intent classifier latency (~500ms). Estimated 30-50/min with 5 replicas. |
+| Max sessions per minute | Bounded by intent classifier latency (~500ms). Estimated 30-50/min with 5 orchestrator replicas. |
 | Bottleneck | LLM API rate limits, not compute or storage. |
-| Scaling strategy | Horizontal (more Container Apps replicas) with Service Bus session affinity. |
+| Scaling strategy | The **orchestrator** scales horizontally (more Container Apps replicas, KEDA on Service Bus queue depth, session affinity — ADR-004, ADR-012). The **toolshed, chat bots, and dashboard are pinned to a single replica** (ADR-025): their rate limiter, circuit breaker, and pending-approval reads/writes are process-local state with no cross-replica coordination, so adding replicas to those apps would silently break governance enforcement rather than add capacity. See ADR-025 for the trigger condition to revisit. |
 
 The throughput ceiling should be validated with load testing in staging. See `./testing-strategy.md` §Performance Tests.
 

@@ -13,6 +13,7 @@ import {
 import { CircuitBreaker, type CircuitBreakerConfig } from './circuit-breaker.js';
 import { type RateLimiter, createRateLimiter } from './rate-limiter.js';
 import type { McpServerAdapter } from './adapter.js';
+import { type GovernanceStateStore, createInProcessGovernanceStateStore } from './governance-state.js';
 
 export interface ToolContext {
   teamId: string;
@@ -52,6 +53,17 @@ export interface ToolshedState {
   rateLimiter: RateLimiter;
   auditLogger: (entry: AuditEntry) => void | Promise<void>;
   circuitBreakerConfig: CircuitBreakerConfig;
+  /**
+   * Shared-state seam for rate-limit/breaker/approval operations (H5/F6,
+   * ADR-025). Today this is always an in-process adapter
+   * (`createInProcessGovernanceStateStore`) over the same `rateLimiter`,
+   * `breakers`, and `store` fields above — `executeTool`/`gateDestructiveCall`
+   * read and write governance state exclusively through this field rather
+   * than reaching into those collaborators directly, so a future distributed
+   * implementation only needs to satisfy this interface. See
+   * `governance-state.ts` and the ExecPlan Decision Log (Milestone 7).
+   */
+  governanceState: GovernanceStateStore;
   /**
    * Shared HMAC secret used to verify minion identity tokens (Milestone 3,
    * C1/C2 fix). Required to accept a signed `minion_token`; see
@@ -134,19 +146,6 @@ export function computeRequestHash(
     .digest('hex');
 }
 
-function getBreaker(
-  breakers: Map<string, CircuitBreaker>,
-  config: CircuitBreakerConfig,
-  key: string
-): CircuitBreaker {
-  let breaker = breakers.get(key);
-  if (!breaker) {
-    breaker = new CircuitBreaker(config);
-    breakers.set(key, breaker);
-  }
-  return breaker;
-}
-
 function cacheKey(ctx: ToolContext, serverAlias: string, toolName: string, params: unknown): string {
   return `${ctx.teamId}:${ctx.minionType}:${serverAlias}:${toolName}:${JSON.stringify(params)}`;
 }
@@ -176,11 +175,11 @@ export function resolveApprovalRecord(
   if (!state) {
     return { status: 'error', error: 'Toolshed not initialized' };
   }
-  const approval = state.store.getApproval(approvalId);
+  const approval = state.governanceState.getApproval(approvalId);
   if (!approval) {
     return { status: 'error', error: `Approval ${approvalId} not found` };
   }
-  state.store.resolveApproval(approvalId, decision, approver);
+  state.governanceState.resolveApproval(approvalId, decision, approver);
   return { status: 'success', data: { approvalId, decision, approver } };
 }
 
@@ -397,7 +396,7 @@ export async function executeTool(
   const serverRateKey = `server:${serverAlias}`;
   const serverRateLimit = toolshedState.governance.rateLimits[serverAlias] ?? toolshedState.governance.rateLimits.default;
   if (serverRateLimit) {
-    const serverThrottle = toolshedState.rateLimiter.canExecuteWithLimit(serverRateKey, serverRateLimit);
+    const serverThrottle = toolshedState.governanceState.takeRateLimitToken(serverRateKey, serverRateLimit);
     if (!serverThrottle.allowed) {
       return emit({
         status: 'throttled',
@@ -411,7 +410,7 @@ export async function executeTool(
   // `default` limit. Kept in addition to the per-server bucket above, per
   // the pinned enforcement order — both are checked at the rate-limit step.
   const rateKey = `${ctx.teamId}:${ctx.minionType}:${serverAlias}:${toolName}`;
-  const rateLimit = toolshedState.rateLimiter.canExecute(rateKey);
+  const rateLimit = toolshedState.governanceState.takeDefaultRateLimitToken(rateKey);
   if (!rateLimit.allowed) {
     return emit({
       status: 'throttled',
@@ -427,20 +426,19 @@ export async function executeTool(
   // separately-tracked, still-closed breakers. See README.md for the same
   // statement kept in sync.
   const breakerKey = serverAlias;
-  const breaker = getBreaker(toolshedState.breakers, toolshedState.circuitBreakerConfig, breakerKey);
-  if (!breaker.canExecute()) {
+  if (!toolshedState.governanceState.canExecuteBreaker(breakerKey)) {
     return emit({
       status: 'throttled',
       error: 'Circuit breaker is open',
-      retryAfterSeconds: breaker.retryAfterSeconds,
+      retryAfterSeconds: toolshedState.governanceState.breakerRetryAfterSeconds(breakerKey),
     });
   }
 
   if (isDestructive(toolshedState.governance, serverAlias, toolName, paramsRecord)) {
-    return emit(await gateDestructiveCall(toolshedState, ctx, serverAlias, toolName, params, breaker));
+    return emit(await gateDestructiveCall(toolshedState, ctx, serverAlias, toolName, params, breakerKey));
   }
 
-  return emit(await doExecuteTool(ctx, serverAlias, toolName, params, breaker));
+  return emit(await doExecuteTool(ctx, serverAlias, toolName, params, breakerKey));
 }
 
 /**
@@ -458,10 +456,10 @@ async function gateDestructiveCall(
   serverAlias: string,
   toolName: string,
   params: unknown,
-  breaker: CircuitBreaker
+  breakerKey: string
 ): Promise<Pick<ToolResult, 'status' | 'data' | 'error' | 'approvalId'>> {
   const requestHash = computeRequestHash(serverAlias, toolName, params, ctx.correlationId);
-  const existing = state.store.getApprovalByRequestHash(requestHash);
+  const existing = state.governanceState.getApprovalByRequestHash(requestHash);
 
   if (existing && existing.decision === 'approved' && existing.consumedAt === undefined) {
     // Read-time timeout: a decision made after timeoutAt still counts as
@@ -471,8 +469,8 @@ async function gateDestructiveCall(
     if (existing.timeoutAt < state.now()) {
       return { status: 'approval_timeout', approvalId: existing.id, error: 'Approval request timed out' };
     }
-    state.store.markApprovalConsumed(existing.id, state.now());
-    return { approvalId: existing.id, ...(await doExecuteTool(ctx, serverAlias, toolName, params, breaker)) };
+    state.governanceState.markApprovalConsumed(existing.id, state.now());
+    return { approvalId: existing.id, ...(await doExecuteTool(ctx, serverAlias, toolName, params, breakerKey)) };
   }
 
   if (existing && existing.decision === 'denied') {
@@ -519,7 +517,7 @@ async function gateDestructiveCall(
     timeoutAt: requestedAt + state.governance.approvalTimeoutMinutes * 60_000,
     requestHash,
   };
-  state.store.createApproval(approval);
+  state.governanceState.createApproval(approval);
 
   if (state.approvalNotifier) {
     try {
@@ -544,7 +542,7 @@ async function doExecuteTool(
   serverAlias: string,
   toolName: string,
   params: unknown,
-  breaker: CircuitBreaker
+  breakerKey: string
 ): Promise<Pick<ToolResult, 'status' | 'data' | 'error'>> {
   const state = globalState!;
 
@@ -559,7 +557,7 @@ async function doExecuteTool(
   if (cacheKeyValue) {
     const cached = state.store.getCachedToolCall(cacheKeyValue);
     if (cached !== undefined) {
-      breaker.recordSuccess();
+      state.governanceState.recordBreakerSuccess(breakerKey);
       return { status: 'success', data: cached };
     }
   }
@@ -576,14 +574,14 @@ async function doExecuteTool(
 
   try {
     const data = await adapter.callTool(toolName, params);
-    breaker.recordSuccess();
+    state.governanceState.recordBreakerSuccess(breakerKey);
     if (cacheKeyValue) {
       const ttlMs = (policy.ttlSeconds ?? 0) * 1000;
       state.store.setCachedToolCall(cacheKeyValue, data, ttlMs);
     }
     return { status: 'success', data };
   } catch (err) {
-    breaker.recordFailure();
+    state.governanceState.recordBreakerFailure(breakerKey);
     return { status: 'error', error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -591,6 +589,16 @@ async function doExecuteTool(
 export function createDefaultToolshedState(
   overrides: Partial<ToolshedState> & Pick<ToolshedState, 'store' | 'adapters'>
 ): ToolshedState {
+  const breakers = overrides.breakers ?? new Map<string, CircuitBreaker>();
+  const rateLimiter = overrides.rateLimiter ?? createRateLimiter();
+  const circuitBreakerConfig = overrides.circuitBreakerConfig ?? {
+    failureThreshold: 5,
+    successThreshold: 3,
+    timeoutSecs: 30,
+    halfOpenMaxRequests: 1,
+  };
+  const store = overrides.store;
+
   return {
     allowlists: { allowlists: {}, pathScopes: {}, shellCommands: {} },
     governance: {
@@ -601,19 +609,20 @@ export function createDefaultToolshedState(
       cachePolicy: { default: { cacheable: false } },
       pathCheckedTools: {},
     },
-    breakers: new Map<string, CircuitBreaker>(),
-    rateLimiter: createRateLimiter(),
+    breakers,
+    rateLimiter,
     auditLogger: (entry) => {
       console.log(`[AUDIT] ${entry.status} ${entry.minionType} ${entry.serverAlias}.${entry.toolName} ${entry.latencyMs}ms`);
     },
-    circuitBreakerConfig: {
-      failureThreshold: 5,
-      successThreshold: 3,
-      timeoutSecs: 30,
-      halfOpenMaxRequests: 1,
-    },
+    circuitBreakerConfig,
     allowUnsignedTokens: false,
     now: Date.now,
+    // Built from the (possibly overridden) rateLimiter/breakers/
+    // circuitBreakerConfig/store above so it always reflects the same
+    // collaborators `executeTool` reads elsewhere on this state — a caller
+    // may still override `governanceState` directly (e.g. to test a future
+    // distributed implementation) via `...overrides` below.
+    governanceState: createInProcessGovernanceStateStore(rateLimiter, breakers, circuitBreakerConfig, store),
     ...overrides,
   };
 }

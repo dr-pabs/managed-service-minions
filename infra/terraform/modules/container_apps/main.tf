@@ -116,6 +116,10 @@ resource "azurerm_container_app" "slack_bot" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the bot shares the same mounted
+    # SQLite file as the toolshed/dashboard and posts through the toolshed's
+    # process-local rate limiter/breaker; a second replica adds no
+    # coordination-safe capacity today.
     min_replicas = 1
     max_replicas = 1
 
@@ -181,8 +185,17 @@ resource "azurerm_container_app" "toolshed" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the rate limiter's token buckets,
+    # circuit breakers, and pending-approval reads/writes are process-local
+    # state with no cross-replica coordination. Running >1 replica here would
+    # silently multiply effective rate limits, let each replica's breaker
+    # trip independently of the others, and risk inconsistent approval reads
+    # across the shared SQLite file. Revisit only per ADR-025's trigger
+    # condition (sustained load beyond one replica's capacity, measured via
+    # Milestone 13 metrics), and only after GovernanceStateStore gets a real
+    # distributed implementation.
     min_replicas = 1
-    max_replicas = 3
+    max_replicas = 1
 
     volume {
       name         = "sqlite-data"
@@ -260,8 +273,16 @@ resource "azurerm_container_app" "dashboard" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the dashboard shares the same
+    # mounted SQLite file as the toolshed and, from Milestone 14, proxies
+    # operator approve/deny actions to the toolshed's operator endpoint — it
+    # has no independent governance state of its own but inherits the same
+    # "one writer's view is authoritative" assumption in the approval path.
+    # It is a read/proxy layer with no rate-limiter or breaker state, so
+    # unlike the toolshed there is no throughput reason to scale it out
+    # today either.
     min_replicas = 1
-    max_replicas = 3
+    max_replicas = 1
 
     volume {
       name         = "sqlite-data"
@@ -339,6 +360,10 @@ resource "azurerm_container_app" "teams_bot" {
   }
 
   template {
+    # Pinned to a single replica (ADR-025): the bot shares the same mounted
+    # SQLite file as the toolshed/dashboard and posts through the toolshed's
+    # process-local rate limiter/breaker; a second replica adds no
+    # coordination-safe capacity today.
     min_replicas = 1
     max_replicas = 1
 
