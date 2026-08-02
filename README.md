@@ -196,6 +196,26 @@ See [`adrs/adr-023-100-percent-test-coverage-gate.md`](./adrs/adr-023-100-percen
 
 ## Running locally with Minions
 
+### Local development mode (docker-compose)
+
+For a fully self-contained local environment with no Goose or cloud dependencies:
+
+```bash
+pnpm dev
+```
+
+This builds all TypeScript packages and starts `docker compose --profile dev up --build`, which brings up mock MCP servers returning canned data:
+
+- GitHub (port 3001)
+- Azure DevOps (port 3002)
+- ServiceNow (port 3003)
+- Jira (port 3004)
+- Shell (port 3005)
+
+The mock servers implement the MCP protocol (SSE transport) over HTTP, compatible with the toolshed's `createMcpAdapter` URL-based connection (see `extensions/mcp-toolshed/src/adapter.ts`). SQLite session/audit storage uses a local file at `/tmp/minions-dev.sqlite` (configured via `TOOLSHED_STORE_PATH` by `scripts/dev.sh`).
+
+To stop: `Ctrl-C` (the dev script handles cleanup), or `docker compose --profile dev down`.
+
 ### 1. Install the plugin
 
 ```bash

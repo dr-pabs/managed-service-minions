@@ -1,0 +1,18 @@
+{
+  "name": "mock-azure-devops",
+  "version": "1.0.0",
+  "description": "Mock Azure DevOps MCP server for local development of the Minions framework",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "npx tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.15.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^22.15.0"
+  }
+}
