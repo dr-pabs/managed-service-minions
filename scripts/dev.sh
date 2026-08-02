@@ -1,15 +1,14 @@
-#!/usr/bin/env bash
 # Local development convenience script for the Minions framework.
 #
 # Builds all TypeScript packages and extensions, starts the mock MCP servers
-# via docker-compose (SSE over HTTP on ports 3001-3005), then instructs you to
-# start Goose with the toolshed extension configured to use the mock servers.
+# via docker-compose (SSE over HTTP on ports 3001-3005), then starts the
+# Minions runtime with the toolshed extension configured to use the mock servers.
 #
 # The toolshed connects to the mock servers via SSE (url-based MCP adapter,
 # see extensions/mcp-toolshed/src/adapter.ts). SQLite session/audit storage is
 # a local file at /tmp/minions-dev.sqlite.
 #
-# Prerequisites: Node.js >= 20, pnpm 10.10.0, Docker, Goose CLI >= 1.37.
+# Prerequisites: Node.js >= 20, pnpm 10.10.0, Docker, Minions CLI.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,8 +27,8 @@ if ! command -v docker &>/dev/null; then
   exit 1
 fi
 
-if ! command -v goose &>/dev/null; then
-  echo "ERROR: the Goose CLI is required. Install from https://github.com/block/goose" >&2
+if ! command -v minions &>/dev/null; then
+  echo "ERROR: the Minions CLI is required. Install from https://github.com/dr-pabs/managed-service-minions" >&2
   exit 1
 fi
 
@@ -74,12 +73,12 @@ echo "    ADAPTERS:        SSE connections to mock servers on ports 3001-3005"
 mkdir -p "$(dirname "$TOOLSHED_STORE_PATH")"
 
 echo ""
-echo "==> Starting Goose with the orchestrator toolshed extension..."
+echo "==> Starting the Minions runtime with the toolshed extension..."
 echo "    (Press Ctrl-C to stop. The mock servers stay running in the background.)"
 echo ""
 
 trap 'echo ""; echo "==> Stopping mock MCP servers..."; docker compose --profile dev down 2>/dev/null || true' EXIT INT TERM
 
-exec goose serve \
+exec minions serve \
   --port 3284 \
   --with-extension "node extensions/mcp-toolshed/dist/server.js"

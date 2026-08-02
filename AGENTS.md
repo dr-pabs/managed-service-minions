@@ -65,7 +65,7 @@ This builds all TypeScript packages and starts `docker compose --profile dev up 
 
 ### Without Docker
 
-If you have the Goose CLI installed, you can also run `goose serve --port 3284 --with-extension "node extensions/mcp-toolshed/dist/server.js"` and interact via the `goose` CLI directly. See the README's "Running locally with Minions" section for details.
+If you have the Minions CLI installed, you can also run `minions serve --port 3284 --with-extension "node extensions/mcp-toolshed/dist/server.js"` and interact via the `minions` CLI directly. See the README's "Running locally with Minions" section for details.
 
 Quality gates:
 - **Coverage thresholds** are required for all runnable TypeScript code in `packages/` and `extensions/`: 95% branch and line coverage, 100% function and statement coverage per package. The CI pipeline fails if any package drops below its configured threshold. See `./docs/testing-strategy.md` and `./adrs/adr-023-100-percent-test-coverage-gate.md` (including its 2026-07-09 amendment) for the full coverage policy and why branches/lines were lowered from 100%.
