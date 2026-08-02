@@ -100,7 +100,7 @@ The design authority lives in [`./docs/high-level-design.md`](./docs/high-level-
       Slack     Teams         Filesystem    Shell
 ```
 
-- The **plugin** is a git-installable bundle of Markdown/JSON skills and agents. It is loaded with `goose plugin install`.
+- The **plugin** is a git-installable bundle of Markdown/JSON skills and agents. It is loaded with `minions plugin install`.
 - The **MCP extensions** are Node.js MCP servers configured separately in Goose. They are built from this monorepo.
 - The orchestrator spawns minions with `delegate(async: true)` because `delegate` inherits the parent’s extensions, giving minions access to shell, file, analyze, and the toolshed.
 
@@ -219,9 +219,9 @@ To stop: `Ctrl-C` (the dev script handles cleanup), or `docker compose --profile
 ### 1. Install the plugin
 
 ```bash
-goose plugin install file://$(pwd)
+minions plugin install file://$(pwd)
 # or after pushing to GitHub:
-# goose plugin install https://github.com/dr-pabs/managed-service-minions.git
+# minions plugin install https://github.com/dr-pabs/managed-service-minions.git
 ```
 
 The plugin content lands in `~/.agents/plugins/managed-service-minions/`.
@@ -232,9 +232,9 @@ The plugin content lands in `~/.agents/plugins/managed-service-minions/`.
 pnpm build
 ```
 
-### 3. Register the extensions in Goose config
+### 3. Register the extensions in Minions config
 
-Add to `~/.config/goose/config.yaml` (exact schema may vary by Goose version):
+Add to `~/.config/minions/config.yaml` (exact schema may vary by version):
 
 ```yaml
 extensions:
@@ -255,12 +255,12 @@ orchestrator:
   enabled: true
 ```
 
-> **Note:** `--with-builtin` does not override disabled config entries in Goose 1.37.0. Enable the extensions in config.
+> **Note:** `--with-builtin` does not override disabled config entries in Minions 1.37.0. Enable the extensions in config.
 
 ### 4. Run a one-off task
 
 ```bash
-goose run \
+minions run \
   --with-extension "node extensions/mcp-toolshed/dist/index.js" \
   --with-builtin developer,analyze,chatrecall,orchestrator \
   -t "@minions review PR #342"
@@ -271,9 +271,9 @@ goose run \
 Recipes inside a plugin’s `commands/` directory are not auto-discovered. Validate or run them by path:
 
 ```bash
-goose recipe validate ~/.agents/plugins/managed-service-minions/commands/daily-pr-review.yaml
-export GOOSE_RECIPE_PATH="$HOME/.agents/plugins/managed-service-minions/commands"
-goose recipe list
+minions recipe validate ~/.agents/plugins/managed-service-minions/commands/daily-pr-review.yaml
+export MINIONS_RECIPE_PATH="$HOME/.agents/plugins/managed-service-minions/commands"
+minions recipe list
 ```
 
 ---

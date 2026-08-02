@@ -61,11 +61,11 @@ Common commands (after `pnpm install`):
 2. Install dependencies: `pnpm install`
 3. Start the local stack: `pnpm dev`
 
-This builds all TypeScript packages and starts `docker compose --profile dev up --build`, which brings up mock MCP servers for GitHub (port 3001), Azure DevOps (3002), ServiceNow (3003), Jira (3004), and shell (3005). The mock servers return canned data so the full orchestration pipeline can be exercised locally without cloud credentials or a live Goose process. SQLite session/audit storage uses a local file at `/tmp/minions-dev.sqlite` (configured by `scripts/dev.sh`).
+This builds all TypeScript packages and starts `docker compose --profile dev up --build`, which brings up mock MCP servers for GitHub (port 3001), Azure DevOps (3002), ServiceNow (3003), Jira (port 3004), and shell (3005). The mock servers return canned data so the full orchestration pipeline can be exercised locally without cloud credentials or a live Minions process. SQLite session/audit storage uses a local file at `/tmp/minions-dev.sqlite` (configured by `scripts/dev.sh`).
 
 ### Without Docker
 
-If you have the Goose CLI installed, you can also run `goose serve --port 3284 --with-extension "node extensions/mcp-toolshed/dist/server.js"` and interact via the `goose` CLI directly. See the README's "Running locally with Minions" section for details.
+If you have the Minions CLI installed, you can also run `minions serve --port 3284 --with-extension "node extensions/mcp-toolshed/dist/server.js"` and interact via the `minions` CLI directly. See the README's "Running locally with Minions" section for details.
 
 Quality gates:
 - **Coverage thresholds** are required for all runnable TypeScript code in `packages/` and `extensions/`: 95% branch and line coverage, 100% function and statement coverage per package. The CI pipeline fails if any package drops below its configured threshold. See `./docs/testing-strategy.md` and `./adrs/adr-023-100-percent-test-coverage-gate.md` (including its 2026-07-09 amendment) for the full coverage policy and why branches/lines were lowered from 100%.
