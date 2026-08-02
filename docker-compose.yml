@@ -1,0 +1,60 @@
+# Local development stack for the Minions framework.
+#
+# Starts mock MCP servers (GitHub, Azure DevOps, ServiceNow, Jira, shell)
+# that return canned data, so the full orchestration pipeline can be
+# exercised locally without cloud credentials or real external APIs.
+#
+# The toolshed runs locally as a Goose extension (see scripts/dev.sh) and
+# connects to these mock servers via SSE transport. SQLite session/audit
+# storage is a local file (default: /tmp/minions-dev.sqlite) configured via
+# TOOLSHED_STORE_PATH — no separate SQLite container is needed.
+#
+# Usage:
+#   docker compose --profile dev up --build -d   # start mock servers
+#   docker compose --profile dev down             # stop mock servers
+
+services:
+  mock-github:
+    build:
+      context: ./mocks/github
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    container_name: mock-github
+    profiles: ['dev']
+
+  mock-azure-devops:
+    build:
+      context: ./mocks/azure-devops
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3000"
+    container_name: mock-azure-devops
+    profiles: ['dev']
+
+  mock-servicenow:
+    build:
+      context: ./mocks/servicenow
+      dockerfile: Dockerfile
+    ports:
+      - "3003:3000"
+    container_name: mock-servicenow
+    profiles: ['dev']
+
+  mock-jira:
+    build:
+      context: ./mocks/jira
+      dockerfile: Dockerfile
+    ports:
+      - "3004:3000"
+    container_name: mock-jira
+    profiles: ['dev']
+
+  mock-shell:
+    build:
+      context: ./mocks/shell
+      dockerfile: Dockerfile
+    ports:
+      - "3005:3000"
+    container_name: mock-shell
+    profiles: ['dev']

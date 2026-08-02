@@ -42,6 +42,7 @@ The repository now contains both design/spec artifacts and runnable scaffolding:
 - `test/performance/` — k6 load-test skeleton for staging performance validation.
 - `test/chaos/` — shell scripts for operational chaos tests.
 - `docs/runbooks/` — operational runbooks for DR, handoff, and security review.
+- `mocks/` — lightweight mock MCP servers (GitHub, Azure DevOps, ServiceNow, Jira, shell) for local development via docker-compose.
 
 Common commands (after `pnpm install`):
 - `pnpm typecheck` — run TypeScript `--noEmit` across the monorepo.
@@ -51,6 +52,20 @@ Common commands (after `pnpm install`):
 - `pnpm test:integration` — run integration tests.
 - `pnpm test:e2e` — run E2E smoke tests.
 - `pnpm test:prompts` — run prompt-quality harness.
+
+## Local Development
+
+### Quick start
+
+1. Install prerequisites: Node.js >= 20, pnpm 10.10.0, Docker.
+2. Install dependencies: `pnpm install`
+3. Start the local stack: `pnpm dev`
+
+This builds all TypeScript packages and starts `docker compose --profile dev up --build`, which brings up mock MCP servers for GitHub (port 3001), Azure DevOps (3002), ServiceNow (3003), Jira (3004), and shell (3005). The mock servers return canned data so the full orchestration pipeline can be exercised locally without cloud credentials or a live Goose process. SQLite session/audit storage uses a local file at `/tmp/minions-dev.sqlite` (configured by `scripts/dev.sh`).
+
+### Without Docker
+
+If you have the Goose CLI installed, you can also run `goose serve --port 3284 --with-extension "node extensions/mcp-toolshed/dist/server.js"` and interact via the `goose` CLI directly. See the README's "Running locally with Minions" section for details.
 
 Quality gates:
 - **Coverage thresholds** are required for all runnable TypeScript code in `packages/` and `extensions/`: 95% branch and line coverage, 100% function and statement coverage per package. The CI pipeline fails if any package drops below its configured threshold. See `./docs/testing-strategy.md` and `./adrs/adr-023-100-percent-test-coverage-gate.md` (including its 2026-07-09 amendment) for the full coverage policy and why branches/lines were lowered from 100%.
