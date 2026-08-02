@@ -32,7 +32,7 @@ Build a single `mcp-toolshed` Goose extension that manages connections to all MC
 - **Clean separation of concerns** — Tools are defined once in MCP servers and shared across all minions. Tool definitions are owned by the integration, not by individual minions.
 - **Unified governance** — The `mcp-toolshed` extension is a single interception point for allowlisting, rate limiting, logging, and audit.
 - **Swappable backends** — If a system changes (e.g., Jira Cloud → Jira Data Center), only its MCP server changes; minion prompts and tool names stay the same.
-- **Transport flexibility** — MCP supports stdio (local tools: filesystem, git, shell), SSE (streaming events), and WebSocket. This covers all integration patterns we need.
+- **Transport flexibility** — MCP supports stdio (local tools: filesystem, git, shell), SSE (streaming events), and WebSocket. This covers all integration patterns we need. The `mcp-toolshed` adapter (`extensions/mcp-toolshed/src/adapter.ts`) supports both stdio (via `StdioClientTransport`) and SSE (via optional `url` field using `SSEClientTransport`) connection methods, enabling mock MCP servers to run as separate Docker containers for local development.
 
 ## Consequences
 

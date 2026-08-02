@@ -160,20 +160,23 @@ describe('Intent Classifier', () => {
 
 ### MCP Mock Server
 
-For integration tests, we run a lightweight MCP mock server that:
+For local development and integration testing, mock MCP servers return canned data for each platform. These are implemented as standalone SSE-based MCP servers under `mocks/`:
 
-- Responds to `health_check` with configurable status (healthy, degraded, down)
-- Returns pre-recorded responses for known tool calls (e.g., `get_pr_diff(342)` returns a canned diff)
-- Simulates latency (`?latency=2000` returns in 2 seconds)
-- Simulates errors (`?error=429` returns rate limit)
-- Logs all received calls for assertion
+- **`mocks/github/`** — returns canned PR data and diffs for GitHub tools
+- **`mocks/azure-devops/`** — returns canned PR and work-item data for Azure DevOps tools
+- **`mocks/servicenow/`** — returns canned incident data for ServiceNow tools
+- **`mocks/jira/`** — returns canned issue data for Jira tools
+- **`mocks/shell/`** — returns canned output for shell commands (test results, git diffs)
 
+Each mock server listens on port 3000 inside its Docker container (mapped to host ports 3001-3005 via `docker-compose.yml`). The toolshed connects to them via SSE transport (the `url` field in `McpAdapterConfig`).
+
+For local dev:
 ```bash
-# Start mock servers for integration tests
-mcp-mock --server github --port 9001 --scenarios scenarios/github.yaml &
-mcp-mock --server azure-devops --port 9002 --scenarios scenarios/ado.yaml &
-mcp-mock --server servicenow --port 9003 --scenarios scenarios/servicenow.yaml &
+pnpm dev
+# Builds all packages, starts docker-compose with mock MCP servers, and runs goose serve
 ```
+
+For in-process integration tests (Jest), use the toolshed's `createMockAdapter` from `extensions/mcp-toolshed/src/adapter.ts` — a lightweight in-memory adapter that records calls and returns scripted responses without any Docker or network.
 
 ### Example: Pipeline Integration Test
 

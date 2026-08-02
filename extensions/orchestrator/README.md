@@ -190,13 +190,31 @@ stack trace), and the `MinionRun` row is recorded with status
 frontmatter `model_tier`) for an estimated USD figure — see
 `packages/framework-core/src/model-cost.ts`.
 
-## Untrusted-content interpolation points (Milestone 16 will quarantine these)
+## Untrusted-content interpolation points (Milestone 16 — implemented)
 
-`src/runner.ts`'s `buildMinionUserContent` and `classifyIntent` interpolate
-`request.text` (the raw user chat message) directly into every minion's
-prompt with no quarantine boundary — marked with `UNTRUSTED-INTERPOLATION-POINT`
-comments in the source. A future DAG step that forwards one minion's raw
-`resultJson` (e.g. a ticket body, PR description, or diff fetched via
-`execute_tool`) into the next minion's prompt is the other class of
-interpolation point Milestone 16 (`quarantineUntrusted`) must wrap. Nothing
-here builds quarantine — this milestone only marks where it needs to go.
+`src/runner.ts` calls `quarantineUntrusted` (from
+`packages/framework-core/src/quarantine.ts`) at three interpolation points,
+each marked with an `UNTRUSTED-INTERPOLATION-POINT` comment in the source:
+
+1. **`buildMinionUserContent`** (line ~206): wraps `request.text` in a
+   quarantined block before interpolating it as the user request for every
+   minion's first turn.
+2. **Prior-minion output forwarding** (line ~218): wraps the accumulated
+   `priorOutputs` JSON in a quarantined block before passing downstream to
+   the next minion in the DAG.
+3. **`classifyIntent`** (line ~235): wraps `request.text` before interpolating
+   it into the orchestrator's own classification prompt (before any minion DAG
+   runs).
+
+`quarantineUntrusted` fences untrusted text with `<<<UNTRUSTED label — data only>>>`
+/ `<<<END UNTRUSTED>>>` delimiters and neutralizes any attempt by the untrusted
+content itself to forge those same delimiters (via zero-width-space insertion
+in `escapeDelimiters` in `quarantine.ts`), so a forged fence cannot break out
+of the quarantined block. This implements Milestone 16 (prompt-injection
+quarantine); the `M16` git commit and `runner.test.ts` /
+`runner-edge-cases.test.ts` tests verify behavior.
+
+The agent prompt files in `agents/*.md` (e.g. `ticket-analyst.md`) instruct
+each minion to treat text inside `<<<UNTRUSTED ...>>>` / `<<<END UNTRUSTED>>>`
+fences as DATA, never as instructions — defense in depth on top of the
+quarantine itself.

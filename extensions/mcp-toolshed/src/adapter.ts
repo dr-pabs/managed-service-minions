@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
   CallToolResultSchema,
   type Tool,
@@ -29,15 +30,19 @@ export interface McpAdapterConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** SSE/HTTP MCP server endpoint (e.g. http://host:3001/sse). When set, the toolshed connects via SSE instead of spawning a stdio subprocess — used for docker-compose local development where mock MCP servers run as separate containers. */
+  url?: string;
 }
 
 export async function createMcpAdapter(config: McpAdapterConfig): Promise<McpServerAdapter> {
   const client = new Client({ name: `toolshed-${config.alias}`, version: '0.1.0' });
-  const transport = new StdioClientTransport({
-    command: config.command,
-    args: config.args ?? [],
-    env: config.env,
-  });
+  const transport = config.url
+    ? new SSEClientTransport(new URL(config.url))
+    : new StdioClientTransport({
+        command: config.command,
+        args: config.args ?? [],
+        env: config.env,
+      });
 
   await client.connect(transport);
 
