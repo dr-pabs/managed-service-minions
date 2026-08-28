@@ -33,35 +33,18 @@ describe('mintMinionToken / verifyMinionToken', () => {
     expect(Object.keys(decoded)).toEqual(['agent_id', 'scope_id', 'correlation_id', 'exp']);
   });
 
-  it('mints under the canonical claim names when given legacy claim names (migration shim)', () => {
-    const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'item_1', correlationId: 'corr_1' },
-      SECRET
-    );
-    const decoded = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
-    // The legacy input names never reach the wire — the token is canonical.
-    expect(decoded).toMatchObject({ agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' });
-    expect(decoded.minionType).toBeUndefined();
-    const result = verifyMinionToken(token, SECRET);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.payload.agent_id).toBe('code_reviewer');
-      expect(result.payload.scope_id).toBe('item_1');
-      expect(result.payload.correlation_id).toBe('corr_1');
-    }
-  });
-
-  it('verifies a legacy-named token, normalizing its claims (migration shim)', () => {
+  it('rejects a legacy-named token now that the Milestone 13 shim is removed', () => {
+    // The wire names minionType/sessionId/correlationId are pre-rename; the
+    // Milestone 21 shim that once normalized them is gone, so a legacy payload
+    // is now an incomplete canonical claim set and must be refused.
     const legacyPayloadB64 = Buffer.from(
       JSON.stringify({ minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1', exp: 4102444800000 })
     ).toString('base64url');
     const sigB64 = createHmac('sha256', SECRET).update(legacyPayloadB64).digest('base64url');
     const result = verifyMinionToken(`${legacyPayloadB64}.${sigB64}`, SECRET);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.payload.agent_id).toBe('code_reviewer');
-      expect(result.payload.scope_id).toBe('sess_1');
-      expect(result.payload.correlation_id).toBe('corr_1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('missing required fields');
     }
   });
 
@@ -152,8 +135,8 @@ describe('mintMinionToken / verifyMinionToken', () => {
   });
 
   it('rejects a token whose payload has a valid exp but an incomplete claim set', () => {
-    // exp is numeric (passes the exp guard) but neither the canonical nor the
-    // legacy claim triple is complete — the shim must still reject it.
+    // exp is numeric (passes the exp guard) but the canonical claim triple is
+    // incomplete, so it is still rejected.
     const payloadB64 = Buffer.from(JSON.stringify({ agent_id: 'x', exp: 4102444800000 })).toString('base64url');
     const sigB64 = createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
     const result = verifyMinionToken(`${payloadB64}.${sigB64}`, SECRET);

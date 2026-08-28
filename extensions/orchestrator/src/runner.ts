@@ -256,7 +256,7 @@ export function createOrchestratorRunner(deps: OrchestratorRunnerDeps): IngressR
   > {
     const correlationId = createMinionCorrelationId(request.correlationRoot, minionIndex);
     const token = mintMinionToken(
-      { minionType, sessionId: request.sessionId, correlationId },
+      { agent_id: minionType, scope_id: request.sessionId, correlation_id: correlationId },
       deps.secret
     );
     const { contents: prompt } = loadAgentPromptAndFrontmatter(repoRoot, minionType);

@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node ./dist/index.js",
-    "test": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage",
+    "test:soak": "NODE_OPTIONS='--experimental-vm-modules' jest --config jest.soak.config.js"
   },
   "dependencies": {
     "@azure/service-bus": "^7.9.0",

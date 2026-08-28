@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mintMinionToken, verifyMinionToken } from '../minion-token.js';
-import type { MinionTokenInput } from '../minion-token.js';
+import type { MinionTokenClaims } from '../minion-token.js';
 
 /**
  * Conformance test against the `identity/v1` cross-language test vectors in
@@ -76,7 +76,7 @@ function loadVectors(): { accept: IdentityVector[]; reject: IdentityVector[] } {
 }
 
 /** The contract claim names are now `MinionTokenPayload`'s own field names. */
-function toTokenInput(payload: IdentityVectorPayload): MinionTokenInput {
+function toTokenInput(payload: IdentityVectorPayload): MinionTokenClaims {
   return {
     agent_id: payload.agent_id,
     scope_id: payload.scope_id,

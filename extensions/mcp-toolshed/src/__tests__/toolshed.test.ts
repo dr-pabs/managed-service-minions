@@ -1189,7 +1189,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const token = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' },
       SECRET
     );
     const result = await verifyAndExecuteTool(
@@ -1222,7 +1222,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     // at all — proves the allowlist check runs against the *verified*
     // minionType, not any caller-supplied value.
     const token = mintMinionToken(
-      { minionType: 'ticket_analyst', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'ticket_analyst', scope_id: 'sess_1', correlation_id: 'corr_1' },
       SECRET
     );
     const result = await verifyAndExecuteTool(
@@ -1245,7 +1245,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const token = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' },
       'wrong-secret'
     );
     const result = await verifyAndExecuteTool(
@@ -1342,7 +1342,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const token = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' },
       SECRET
     );
     // An attacker-chosen team_id must NOT become ctx.teamId on the verified
@@ -1391,7 +1391,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const token = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' },
       SECRET
     );
     const result = await verifyAndExecuteTool(
@@ -1429,7 +1429,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const emptyKeyToken = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' },
       ''
     );
     const result = await verifyAndExecuteTool(

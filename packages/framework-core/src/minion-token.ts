@@ -23,20 +23,6 @@ export interface MinionTokenClaims {
   correlation_id: string;
 }
 
-/**
- * Legacy claim names accepted only during the `identity/v1` migration
- * (ExecPlan Milestone 13). Minted tokens always serialize the canonical
- * `agent_id`/`scope_id`/`correlation_id` names; this shim lets pre-migration
- * callers keep passing the old names. Removed at Milestone 21.
- */
-export interface LegacyMinionTokenClaims {
-  minionType: string;
-  sessionId: string;
-  correlationId: string;
-}
-
-export type MinionTokenInput = MinionTokenClaims | LegacyMinionTokenClaims;
-
 export type VerifyMinionTokenResult =
   | { ok: true; payload: MinionTokenPayload }
   | { ok: false; reason: string };
@@ -56,26 +42,6 @@ function sign(payloadB64: string, secret: string): string {
 }
 
 /**
- * Normalizes either claim spelling onto the canonical `identity/v1` names. The
- * legacy branch is the Milestone 13 compatibility shim (removed at Milestone
- * 21); new code should pass `{agent_id, scope_id, correlation_id}` directly.
- */
-function normalizeClaims(input: MinionTokenInput): MinionTokenClaims {
-  if ('agent_id' in input) {
-    return {
-      agent_id: input.agent_id,
-      scope_id: input.scope_id,
-      correlation_id: input.correlation_id,
-    };
-  }
-  return {
-    agent_id: input.minionType,
-    scope_id: input.sessionId,
-    correlation_id: input.correlationId,
-  };
-}
-
-/**
  * Mints `base64url(json-with-exp).base64url(hmac256)` — not JWT. See the
  * ExecPlan Decision Log for why: one shared secret between two co-deployed
  * trusted processes needs no header/alg negotiation or library.
@@ -85,12 +51,11 @@ function normalizeClaims(input: MinionTokenInput): MinionTokenClaims {
  * vectors depend on that exact order, since claim order is object-insertion
  * order (plain `JSON.stringify`, not `canonicalJson`).
  */
-export function mintMinionToken(input: MinionTokenInput, secret: string, ttlMs: number = DEFAULT_TTL_MS): string {
-  const claims = normalizeClaims(input);
+export function mintMinionToken(input: MinionTokenClaims, secret: string, ttlMs: number = DEFAULT_TTL_MS): string {
   const fullPayload: MinionTokenPayload = {
-    agent_id: claims.agent_id,
-    scope_id: claims.scope_id,
-    correlation_id: claims.correlation_id,
+    agent_id: input.agent_id,
+    scope_id: input.scope_id,
+    correlation_id: input.correlation_id,
     exp: Date.now() + ttlMs,
   };
   const payloadB64 = base64UrlEncode(JSON.stringify(fullPayload));
@@ -100,10 +65,9 @@ export function mintMinionToken(input: MinionTokenInput, secret: string, ttlMs: 
 
 /**
  * Extracts a normalized `identity/v1` payload from a parsed token body,
- * accepting both the canonical claim names and (via the migration shim) the
- * legacy `minionType`/`sessionId`/`correlationId` names. Returns `null` when
- * neither complete claim set is present. Remove the legacy branch at
- * Milestone 21.
+ * accepting only the canonical claim names. Returns `null` when the claim set
+ * is not complete (a non-object body, a non-numeric `exp`, or a missing or
+ * ill-typed claim).
  */
 function extractPayload(parsed: unknown): MinionTokenPayload | null {
   if (typeof parsed !== 'object' || parsed === null) {
@@ -120,13 +84,6 @@ function extractPayload(parsed: unknown): MinionTokenPayload | null {
   ) {
     return { agent_id: p.agent_id, scope_id: p.scope_id, correlation_id: p.correlation_id, exp: p.exp };
   }
-  if (
-    typeof p.minionType === 'string' &&
-    typeof p.sessionId === 'string' &&
-    typeof p.correlationId === 'string'
-  ) {
-    return { agent_id: p.minionType, scope_id: p.sessionId, correlation_id: p.correlationId, exp: p.exp };
-  }
   return null;
 }
 
@@ -136,10 +93,6 @@ function extractPayload(parsed: unknown): MinionTokenPayload | null {
  * Any structural problem (missing dot, bad base64, bad JSON, missing
  * fields), a forged/tampered signature, or an expired `exp` is a rejection
  * with a specific `reason` string — never a thrown exception.
- *
- * Accepts both the canonical `identity/v1` claim names and, during the
- * Milestone 13 migration, the legacy `minionType`/`sessionId`/`correlationId`
- * names; the returned payload is always the canonical shape.
  */
 export function verifyMinionToken(token: string, secret: string): VerifyMinionTokenResult {
   const dotIndex = token.indexOf('.');
