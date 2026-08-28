@@ -17,7 +17,7 @@ Amendments are appended to an ADR, never rewritten over it: the original Context
 | [ADR-009](./adr-009-sqlite-table-blob-storage-reject-cosmos.md) | SQLite + Azure Table Storage + Azure Blob for storage (reject Cosmos DB) | Accepted |
 | [ADR-010](./adr-010-azure-ai-foundry-as-ai-platform.md) | Azure AI Foundry as the AI platform | Accepted |
 | [ADR-011](./adr-011-azure-container-apps-for-compute.md) | Azure Container Apps for compute | Accepted |
-| [ADR-012](./adr-012-azure-service-bus-async-queue.md) | Azure Service Bus for async task queuing | Accepted |
+| [ADR-012](./adr-012-azure-service-bus-async-queue.md) | Azure Service Bus for async task queuing | Accepted (amended by ADR-027) |
 | [ADR-013](./adr-013-github-as-source-of-truth-cicd.md) | GitHub as framework source of truth + CI/CD | Accepted |
 | [ADR-014](./adr-014-teams-phase-1-peer-to-slack.md) | Microsoft Teams as Phase 1 priority (peer to Slack) | Accepted |
 | [ADR-015](./adr-015-azure-devops-first-class-mcp.md) | Azure DevOps as first-class MCP integration | Accepted |
@@ -28,7 +28,14 @@ Amendments are appended to an ADR, never rewritten over it: the original Context
 | [ADR-020](./adr-020-optional-semantic-code-tagging.md) | Optional semantic code tagging | Proposed |
 | [ADR-021](./adr-021-prompt-lifecycle.md) | Prompt lifecycle and quality measurement | Proposed |
 | [ADR-022](./adr-022-multi-tenancy.md) | Multi-tenancy model | Proposed |
-| [ADR-023](./adr-023-100-percent-test-coverage-gate.md) | 100% Test Coverage Gate for Runnable Code | Accepted (amended 2026-07-09: 95% branches/lines) |
+| [ADR-023](./adr-023-100-percent-test-coverage-gate.md) | 100% Test Coverage Gate for Runnable Code | Accepted (amended 2026-07-09: 95% branches/lines; amended 2026-08-28: thresholds skipped on filtered runs only) |
 | [ADR-024](./adr-024-red-build-policy-ralph-wiggum-loop.md) | Red Build Policy — The "Ralph Wiggum" Loop | Accepted |
 | [ADR-025](./adr-025-single-replica-governance-state.md) | Single-replica deployment for the toolshed and chat bots (governance state is process-local) | Accepted (superseded by ADR-026) |
 | [ADR-026](./adr-026-shared-governance-state.md) | Shared governance state for the toolshed (rate limiter + circuit breaker on Azure Tables) | Accepted |
+| [ADR-027](./adr-027-queue-first-ingress.md) | Queue-first Stream ingress (single work queue, consumer-side idempotency, KEDA on the queue-ingress) | Accepted (amends ADR-012) |
+| [ADR-028](./adr-028-effect-gateway.md) | Effect gateway — agents draft, only the gateway commits | Accepted (extends ADR-007) |
+| [ADR-029](./adr-029-identity-v1-claims.md) | `identity/v1` token claim set (`agent_id`, `scope_id`, `correlation_id`, `exp`) | Accepted |
+| [ADR-030](./adr-030-declarative-item-pipelines.md) | Declarative item pipelines under `recipes/` | Accepted |
+| [ADR-031](./adr-031-per-item-and-daily-cost-control.md) | Per-item and daily cost control (`budget/v1`) | Accepted |
+| [ADR-032](./adr-032-sampling-qa-circuit-breaker.md) | Sampling QA loop with a per-effect-type auto-commit circuit breaker | Accepted |
+| [ADR-033](./adr-033-escalation-bridge.md) | Escalation bridge — signed `escalation/v1` envelopes from Stream to the Forge (Flow) | Accepted |

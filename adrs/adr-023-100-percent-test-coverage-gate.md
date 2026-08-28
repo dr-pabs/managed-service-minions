@@ -94,3 +94,23 @@ The original ADR's own "Negative" consequences section already named the risk: *
 ### Trigger for revisiting this amendment
 
 If a future package's `branches` or `lines` coverage genuinely needs to drop below 95% to avoid padding tests, that is a signal the 95% figure itself needs re-examination (or that specific file needs a scoped `collectCoverageFrom` exclusion per the original ADR's exemption process) — not a signal to raise the threshold back to 100% without addressing the underlying pressure this amendment describes.
+
+---
+
+## Amendment (2026-08-28): coverage thresholds are skipped on *filtered* runs only
+
+**Author:** Paul Brown (Forge Ops Stream reconciliation)
+
+**Status of this amendment:** Accepted. Appended, not a rewrite.
+
+### What changed
+
+Some packages' `jest.config.js` (currently `packages/framework-core`, `extensions/mcp-toolshed`, `extensions/queue-ingress`, and `test/`) apply the `coverageThreshold` **conditionally**: when the jest invocation carries a positional test-path pattern (e.g. `pnpm --filter ./packages/framework-core test -- identity-contract`), the threshold block is omitted; when it does not (the plain `pnpm -r test` full-suite invocation, which is what CI runs), the `{ branches: 95, functions: 100, lines: 95, statements: 100 }` thresholds apply exactly as the 2026-07-09 amendment set them.
+
+### Why
+
+A filtered run executes only a subset of `src/`, so the *global* coverage thresholds mathematically cannot hold there — every file the filter excludes counts as 0%-covered. Before this carve-out, running a single suite (the normal way to iterate on one contract test, e.g. the `identity/v1` conformance vectors) failed on the threshold check regardless of whether the exercised code was fully covered, which trained developers to run with `--coverage=false` — a worse habit than the carve-out itself.
+
+### What did NOT change
+
+The full-run bar is untouched: unfiltered runs keep 95% branches/lines and 100% functions/statements, and the CI gate (`pnpm -r --filter "!infra" test`) is always an unfiltered run, so no code path merges with less coverage than before. The carve-out is detection-based (presence of a positional CLI argument), not an env-var opt-out, so it cannot be switched on for a full run.

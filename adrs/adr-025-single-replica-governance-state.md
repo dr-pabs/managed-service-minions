@@ -59,4 +59,4 @@ Revisit this decision (implement a real distributed `GovernanceStateStore`, e.g.
 - `infra/terraform/modules/container_apps/main.tf`
 - `docs/gap-analysis.md` §1 Scale Limits, `docs/high-level-design.md` §SQLite — Session State
 - ADR-004 (stateless minions, stateful orchestrator), ADR-009 (SQLite storage), ADR-011 (Container Apps), ADR-012 (Service Bus)
-- `docs/execplan/2026-07-08-minions-remediation-and-features.md`, Milestone 7 and Decision Log (H5, F6)
+- The 2026-07-08 Minions remediation ExecPlan, Milestone 7 and Decision Log (H5, F6). (The original reference, `docs/execplan/2026-07-08-minions-remediation-and-features.md`, no longer exists as a file; its milestone summary survives in the README roadmap table, and the living execplan record for the programme that followed is `forge-ops.execplan.md` in the forge-contracts repository — note forge-ops uses its own milestone numbering, distinct from the remediation plan's.)
