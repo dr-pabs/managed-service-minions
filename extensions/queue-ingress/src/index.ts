@@ -1,6 +1,7 @@
 import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool } from 'mcp-toolshed';
 import { createOrchestratorRunner, createHttpGooseClient } from 'orchestrator';
 import { consumeQueue } from './consumer.js';
+import { DailyBudget } from './cost-control.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import { WorkItemProcessor } from './processor.js';
 import { InMemoryWorkItemQueue, type WorkItemQueue } from './queue.js';
@@ -33,6 +34,19 @@ async function buildQueue(): Promise<WorkItemQueue> {
   return ServiceBusWorkItemQueue.connect(config.connectionString, config.queueName);
 }
 
+/**
+ * Builds the optional daily throughput budget from `DAILY_BUDGET_MAX_COST_USD`
+ * (budget/v1 `scope: "day"`, `policy: "halt"`). Absent, non-numeric, or
+ * non-positive input means no daily cap — the queue consumes unbounded.
+ */
+function buildDailyBudget(raw: string | undefined): DailyBudget | undefined {
+  const maxCostUsd = Number.parseFloat(raw ?? '');
+  if (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0) {
+    return undefined;
+  }
+  return new DailyBudget(maxCostUsd);
+}
+
 async function main(): Promise<void> {
   const queue = await buildQueue();
   const store = createSqliteStore(config.sqlitePath);
@@ -53,7 +67,9 @@ async function main(): Promise<void> {
     outcomes: new InMemoryIdempotencyStore(),
   });
 
-  await consumeQueue({ queue, processor });
+  const dailyBudget = buildDailyBudget(process.env.DAILY_BUDGET_MAX_COST_USD);
+
+  await consumeQueue({ queue, processor, store, ...(dailyBudget ? { dailyBudget } : {}) });
 }
 
 main().catch((err) => {

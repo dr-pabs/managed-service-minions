@@ -2,6 +2,13 @@ import { mintMinionToken } from 'framework-core';
 import type { SchemaCompileResult, SessionStore } from 'framework-core';
 import type { GooseClient } from 'orchestrator';
 import {
+  createItemCostLedger,
+  DEAD_LETTER_BUDGET_EXCEEDED,
+  ItemBudgetExceededError,
+  priceModelResponse,
+  type ItemCostLedger,
+} from './cost-control.js';
+import {
   errorFindings,
   evidenceRef,
   runVerificationChain,
@@ -41,6 +48,15 @@ export interface ItemPipelineConfig {
   item_type: string;
   max_attempts: number;
   on_failure: 'dead_letter' | 'escalate';
+  /**
+   * The hard per-item cost cap in USD (budget/v1 `scope: "item"`, `policy:
+   * "halt"`). An item whose accumulated model spend reaches this halts and
+   * dead-letters as `BUDGET_EXCEEDED` — the item halts, never the queue. Absent
+   * means uncapped (the item's spend is still tracked, but never enforced).
+   */
+  max_cost_usd?: number;
+  /** Optional warning threshold as a percentage of `max_cost_usd` (budget/v1 `warn_at_pct`). */
+  warn_at_pct?: number;
   classify?: ClassifyStep;
   act: ActStep;
   verify: VerifyConfig;
@@ -93,6 +109,8 @@ export interface ItemPipelineDeps {
     params: unknown;
   }): Promise<ReconcileReadResult>;
   commit: CommitEffect;
+  /** Blended USD price per 1,000 tokens for pricing model calls (Milestone 17). Defaults to 0 (uncapped items never spend). */
+  pricePer1kTokensUsd?: number;
   now?: () => number;
   random?: () => number;
 }
@@ -101,6 +119,32 @@ export type PipelineOutcome =
   | { status: 'committed'; correlationId: string; attempts: number; results: VerificationResult[] }
   | { status: 'dead_lettered'; correlationId: string; attempts: number; results: VerificationResult[]; reason: string }
   | { status: 'escalated'; correlationId: string; attempts: number; results: VerificationResult[]; reason: string };
+
+/** The cost accounting carried through every model call of one item run (Milestone 17). */
+interface CostAccount {
+  ledger: ItemCostLedger;
+  pricePer1kTokensUsd: number;
+}
+
+/**
+ * Prices one model call against the item's cost ledger and halts the item the
+ * moment its accumulated spend reaches the cap. The cap is enforced on the
+ * priced call (post-dispatch): the item only discovers it exceeded `max_cost_usd`
+ * once a call is priced, then throws {@link ItemBudgetExceededError} so the
+ * pipeline dead-letters this item without making a further call.
+ */
+async function runModelCall(
+  call: () => Promise<{ raw: string }>,
+  account: CostAccount,
+  correlationId: string
+): Promise<{ raw: string }> {
+  const response = await call();
+  account.ledger.record(priceModelResponse(response, account.pricePer1kTokensUsd));
+  if (account.ledger.isExhausted()) {
+    throw new ItemBudgetExceededError(account.ledger.spentUsd, account.ledger.maxCostUsd, correlationId);
+  }
+  return response;
+}
 
 function parseJson(raw: string): unknown {
   try {
@@ -138,19 +182,26 @@ async function classify(
   config: ItemPipelineConfig,
   deps: ItemPipelineDeps,
   item: WorkItem,
-  token: string
+  token: string,
+  account: CostAccount
 ): Promise<unknown> {
   if (!config.classify) {
     return item.payload;
   }
-  const response = await deps.goose.runMinion({
-    minionType: config.classify.agent,
-    systemPrompt: config.classify.system_prompt,
-    userContent: classifyUserContent(item),
-    sessionId: item.idempotency_key,
-    correlationId: item.correlation_id,
-    minionToken: token,
-  });
+  const classifyStep = config.classify;
+  const response = await runModelCall(
+    () =>
+      deps.goose.runMinion({
+        minionType: classifyStep.agent,
+        systemPrompt: classifyStep.system_prompt,
+        userContent: classifyUserContent(item),
+        sessionId: item.idempotency_key,
+        correlationId: item.correlation_id,
+        minionToken: token,
+      }),
+    account,
+    item.correlation_id
+  );
   return parseJson(response.raw) ?? item.payload;
 }
 
@@ -160,17 +211,23 @@ async function act(
   item: WorkItem,
   token: string,
   facts: unknown,
-  feedback: string[] | undefined
+  feedback: string[] | undefined,
+  account: CostAccount
 ): Promise<unknown> {
-  const response = await deps.goose.runMinion({
-    minionType: config.act.agent,
-    systemPrompt: config.act.system_prompt,
-    userContent: actUserContent(item, facts),
-    sessionId: item.idempotency_key,
-    correlationId: item.correlation_id,
-    minionToken: token,
-    feedback,
-  });
+  const response = await runModelCall(
+    () =>
+      deps.goose.runMinion({
+        minionType: config.act.agent,
+        systemPrompt: config.act.system_prompt,
+        userContent: actUserContent(item, facts),
+        sessionId: item.idempotency_key,
+        correlationId: item.correlation_id,
+        minionToken: token,
+        feedback,
+      }),
+    account,
+    item.correlation_id
+  );
   return parseJson(response.raw);
 }
 
@@ -179,17 +236,23 @@ async function runJudge(
   deps: ItemPipelineDeps,
   item: WorkItem,
   token: string,
-  userContent: string
+  userContent: string,
+  account: CostAccount
 ): Promise<JudgeVerdict> {
   const judge = config.verify.judge!;
-  const response = await deps.goose.runMinion({
-    minionType: judge.agent,
-    systemPrompt: judge.system_prompt,
-    userContent,
-    sessionId: item.idempotency_key,
-    correlationId: item.correlation_id,
-    minionToken: token,
-  });
+  const response = await runModelCall(
+    () =>
+      deps.goose.runMinion({
+        minionType: judge.agent,
+        systemPrompt: judge.system_prompt,
+        userContent,
+        sessionId: item.idempotency_key,
+        correlationId: item.correlation_id,
+        minionToken: token,
+      }),
+    account,
+    item.correlation_id
+  );
   return parseJudgeVerdict(response.raw);
 }
 
@@ -219,6 +282,34 @@ function writeVerificationAudit(
       error: errors.length > 0 ? errors.join('; ') : undefined,
     });
   }
+}
+
+/**
+ * Writes the `audit/v1` kind `budget` event for an item that crossed its cap
+ * (Milestone 17). Mirrors the shape `writeVerificationAudit` uses so the item's
+ * whole story — verification results and the budget halt — hangs together under
+ * one correlation id.
+ */
+function writeItemBudgetAudit(
+  deps: ItemPipelineDeps,
+  config: ItemPipelineConfig,
+  item: WorkItem,
+  error: ItemBudgetExceededError,
+  now: () => number
+): void {
+  deps.store.createAuditEntry({
+    id: `budget_item_${item.correlation_id}`,
+    timestamp: now(),
+    correlationId: item.correlation_id,
+    minionType: config.act.agent,
+    teamId: config.item_type,
+    serverAlias: 'budget',
+    toolName: 'item_cap',
+    params: { scope: 'item', policy: 'halt', max_cost_usd: error.maxCostUsd, spent_usd: error.spentUsd },
+    status: 'exceeded',
+    latencyMs: 0,
+    error: error.message,
+  });
 }
 
 async function commitEffect(
@@ -254,11 +345,13 @@ async function commitEffect(
 /**
  * Drives one work item through its pipeline to exactly one terminal outcome:
  * `committed` (chain passed and the gateway committed), `dead_lettered`
- * (chain never passed and `on_failure` is `dead_letter`), or `escalated`
- * (chain never passed under `on_failure: escalate`, or the commit was
- * refused). The loop is bounded by `max_attempts`; every attempt's
- * verification results are written to the audit trail under the item's
- * correlation id.
+ * (chain never passed and `on_failure` is `dead_letter`, or the item crossed
+ * its `max_cost_usd` cap as `BUDGET_EXCEEDED`), or `escalated` (chain never
+ * passed under `on_failure: escalate`, or the commit was refused). The loop is
+ * bounded by `max_attempts`; every attempt's verification results are written
+ * to the audit trail under the item's correlation id, and every model call is
+ * priced against the item's cost ledger (Milestone 17) so a runaway item halts
+ * itself rather than the queue around it.
  */
 export async function runItemPipeline(
   config: ItemPipelineConfig,
@@ -273,48 +366,64 @@ export async function runItemPipeline(
     deps.secret
   );
 
-  const facts = await classify(config, deps, item, token);
+  const account: CostAccount = {
+    ledger: createItemCostLedger(config.max_cost_usd, config.warn_at_pct),
+    pricePer1kTokensUsd: deps.pricePer1kTokensUsd ?? 0,
+  };
 
   let lastResults: VerificationResult[] = [];
-  let feedback: string[] | undefined;
+  let attempts = 0;
 
-  for (let attempt = 1; attempt <= config.max_attempts; attempt++) {
-    const action = await act(config, deps, item, token, facts, feedback);
+  try {
+    const facts = await classify(config, deps, item, token, account);
 
-    const chain = await runVerificationChain(config.verify, {
-      minionType: config.act.agent,
-      output: action,
-      schemaMap: deps.schemaMap,
-      schemas: deps.schemas,
-      minionToken: token,
-      correlationId,
-      attempt,
-      sessionId: item.idempotency_key,
-      reconcile: (args) => deps.reconcile({ minionToken: token, correlationId, attempt, ...args }),
-      judge: config.verify.judge
-        ? ({ userContent }) => runJudge(config, deps, item, token, userContent)
-        : undefined,
-      random,
-    });
+    let feedback: string[] | undefined;
 
-    lastResults = chain.results;
-    writeVerificationAudit(deps, config, item, chain.results, attempt, now);
+    for (let attempt = 1; attempt <= config.max_attempts; attempt++) {
+      attempts = attempt;
+      const action = await act(config, deps, item, token, facts, feedback, account);
 
-    if (chain.passed) {
-      const commitResult = await commitEffect(config, deps, item, token, action, chain.composite, now);
-      if (commitResult.committed) {
-        return { status: 'committed', correlationId, attempts: attempt, results: chain.results };
-      }
-      return {
-        status: 'escalated',
+      const chain = await runVerificationChain(config.verify, {
+        minionType: config.act.agent,
+        output: action,
+        schemaMap: deps.schemaMap,
+        schemas: deps.schemas,
+        minionToken: token,
         correlationId,
-        attempts: attempt,
-        results: chain.results,
-        reason: commitResult.refused ?? 'commit refused',
-      };
-    }
+        attempt,
+        sessionId: item.idempotency_key,
+        reconcile: (args) => deps.reconcile({ minionToken: token, correlationId, attempt, ...args }),
+        judge: config.verify.judge
+          ? ({ userContent }) => runJudge(config, deps, item, token, userContent, account)
+          : undefined,
+        random,
+      });
 
-    feedback = errorFindings(chain.results).map((finding) => `${finding.id}: ${finding.message}`);
+      lastResults = chain.results;
+      writeVerificationAudit(deps, config, item, chain.results, attempt, now);
+
+      if (chain.passed) {
+        const commitResult = await commitEffect(config, deps, item, token, action, chain.composite, now);
+        if (commitResult.committed) {
+          return { status: 'committed', correlationId, attempts: attempt, results: chain.results };
+        }
+        return {
+          status: 'escalated',
+          correlationId,
+          attempts: attempt,
+          results: chain.results,
+          reason: commitResult.refused ?? 'commit refused',
+        };
+      }
+
+      feedback = errorFindings(chain.results).map((finding) => `${finding.id}: ${finding.message}`);
+    }
+  } catch (err) {
+    if (err instanceof ItemBudgetExceededError) {
+      writeItemBudgetAudit(deps, config, item, err, now);
+      return { status: 'dead_lettered', correlationId, attempts, results: lastResults, reason: DEAD_LETTER_BUDGET_EXCEEDED };
+    }
+    throw err;
   }
 
   const reason = `verification failed after ${config.max_attempts} attempt(s)`;

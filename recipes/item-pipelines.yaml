@@ -7,6 +7,11 @@ item_pipelines:
   refund_request:
     max_attempts: 2
     on_failure: dead_letter
+    # Hard per-item cost cap (budget/v1 scope "item", policy "halt"). An item
+    # whose model spend reaches this dead-letters as BUDGET_EXCEEDED — the item
+    # halts, never the queue. `warn_at_pct` fires the BUDGET_WARNING crossing.
+    max_cost_usd: 0.75
+    warn_at_pct: 80
     classify:
       agent: refund_classifier
       system_prompt: refund-classify.md

@@ -70,6 +70,7 @@ describe('queue-ingress index (Milestone 15)', () => {
     delete process.env.GOOSE_SERVE_URL;
     delete process.env.GOOSE_BASE_URL;
     delete process.env.TOOLSHED_SIGNING_SECRET;
+    delete process.env.DAILY_BUDGET_MAX_COST_USD;
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -114,7 +115,11 @@ describe('queue-ingress index (Milestone 15)', () => {
       queue: mockInMemoryQueue,
       outcomes: mockIdempotencyStore,
     });
-    expect(consumeQueue).toHaveBeenCalledWith({ queue: mockInMemoryQueue, processor: mockProcessorInstance });
+    expect(consumeQueue).toHaveBeenCalledWith({
+      queue: mockInMemoryQueue,
+      processor: mockProcessorInstance,
+      store: mockSqliteStore,
+    });
   });
 
   it('consumes from Service Bus when a connection string is set', async () => {
@@ -127,7 +132,11 @@ describe('queue-ingress index (Milestone 15)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
     expect(InMemoryWorkItemQueue).not.toHaveBeenCalled();
     expect(ServiceBusWorkItemQueue.connect).toHaveBeenCalledWith('Endpoint=sb://ns', 'my-queue');
-    expect(consumeQueue).toHaveBeenCalledWith({ queue: mockServiceBusQueue, processor: mockProcessorInstance });
+    expect(consumeQueue).toHaveBeenCalledWith({
+      queue: mockServiceBusQueue,
+      processor: mockProcessorInstance,
+      store: mockSqliteStore,
+    });
   });
 
   it('defaults the Service Bus queue name to minion-tasks', async () => {
@@ -150,6 +159,29 @@ describe('queue-ingress index (Milestone 15)', () => {
     expect(createSqliteStore).toHaveBeenCalledWith('/data/queue.db');
     expect(createHttpGooseClient).toHaveBeenCalledWith({ baseUrl: 'http://goose-base:3284' });
     expect(createOrchestratorRunner).toHaveBeenCalledWith(expect.objectContaining({ secret: 'the-secret' }));
+  });
+
+  it('wires a daily budget when DAILY_BUDGET_MAX_COST_USD is a positive number', async () => {
+    process.env.DAILY_BUDGET_MAX_COST_USD = '250.0';
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    const consumeArg = consumeQueue.mock.calls[0][0];
+    expect(consumeArg.store).toBe(mockSqliteStore);
+    expect(consumeArg.dailyBudget).toBeDefined();
+    expect(consumeArg.dailyBudget.maxCostUsd).toBe(250.0);
+  });
+
+  it('skips the daily budget when DAILY_BUDGET_MAX_COST_USD is not positive', async () => {
+    process.env.DAILY_BUDGET_MAX_COST_USD = '0';
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    const consumeArg = consumeQueue.mock.calls[0][0];
+    expect(consumeArg.store).toBe(mockSqliteStore);
+    expect(consumeArg.dailyBudget).toBeUndefined();
   });
 
   it('exits when building the toolshed state rejects', async () => {

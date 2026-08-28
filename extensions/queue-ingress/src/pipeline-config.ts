@@ -183,6 +183,20 @@ export function parsePipelineYaml(raw: unknown, itemType: string, recipeDir: str
     verify,
     commit,
   };
+
+  if (raw.max_cost_usd !== undefined) {
+    assert(
+      typeof raw.max_cost_usd === 'number' && Number.isFinite(raw.max_cost_usd),
+      `${label}.max_cost_usd must be a finite number`
+    );
+    assert(raw.max_cost_usd > 0, `${label}.max_cost_usd must be > 0`);
+    config.max_cost_usd = raw.max_cost_usd as number;
+  }
+  if (raw.warn_at_pct !== undefined) {
+    assert(typeof raw.warn_at_pct === 'number', `${label}.warn_at_pct must be a number`);
+    assert(raw.warn_at_pct >= 0 && raw.warn_at_pct <= 100, `${label}.warn_at_pct must be between 0 and 100`);
+    config.warn_at_pct = raw.warn_at_pct as number;
+  }
   if (raw.classify !== undefined) {
     config.classify = parseClassify(raw.classify, recipeDir, label);
   }
