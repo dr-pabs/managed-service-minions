@@ -19,6 +19,13 @@ import {
   type VerificationResult,
 } from './verification.js';
 import type { WorkItem } from './work-item.js';
+import {
+  assembleEscalationEnvelope,
+  type AttemptRecord,
+  type EscalationCause,
+  type EscalationEnvelope,
+  type ResolutionEnvelope,
+} from './escalation.js';
 
 /**
  * The bounded item pipeline (Milestone 16): classify -> act -> verify -> commit
@@ -94,6 +101,14 @@ export type CommitEffect = (args: {
   compositeResult: VerificationResult;
 }) => Promise<EffectCommitResult>;
 
+/**
+ * The escalation emitter seam (Milestone 20). The pipeline hands it a signed
+ * `escalation/v1` envelope and it delivers it to Flow's intake, returning the
+ * verified resolution. Absent, the pipeline's escalation outcomes stay
+ * `escalated` (no bridge) — the existing Milestone 16 behaviour.
+ */
+export type EscalateItem = (envelope: EscalationEnvelope) => Promise<{ resolution: ResolutionEnvelope }>;
+
 export interface ItemPipelineDeps {
   goose: GooseClient;
   store: SessionStore;
@@ -109,6 +124,17 @@ export interface ItemPipelineDeps {
     params: unknown;
   }): Promise<ReconcileReadResult>;
   commit: CommitEffect;
+  /** The escalation emitter (Milestone 20): delivers a signed envelope to Flow's intake. Absent, escalation outcomes stay `escalated`. */
+  escalate?: EscalateItem;
+  /**
+   * The bridge signing secret the `escalation/v1` envelope is minted under
+   * (Milestone 20). Distinct from the identity `secret` — the envelope is
+   * signed and verified with the *bridge* key both runtimes share, not the
+   * agent-identity key. Falls back to `secret` when absent so a pipeline
+   * wired without a dedicated bridge secret still signs (deployments that
+   * bridge to Flow MUST set it to match `FORGE_BRIDGE_SECRET`).
+   */
+  bridgeSecret?: string;
   /** Blended USD price per 1,000 tokens for pricing model calls (Milestone 17). Defaults to 0 (uncapped items never spend). */
   pricePer1kTokensUsd?: number;
   now?: () => number;
@@ -118,7 +144,15 @@ export interface ItemPipelineDeps {
 export type PipelineOutcome =
   | { status: 'committed'; correlationId: string; attempts: number; results: VerificationResult[] }
   | { status: 'dead_lettered'; correlationId: string; attempts: number; results: VerificationResult[]; reason: string }
-  | { status: 'escalated'; correlationId: string; attempts: number; results: VerificationResult[]; reason: string };
+  | { status: 'escalated'; correlationId: string; attempts: number; results: VerificationResult[]; reason: string }
+  | {
+      status: 'bridged';
+      correlationId: string;
+      attempts: number;
+      results: VerificationResult[];
+      cause: EscalationCause;
+      resolution: ResolutionEnvelope;
+    };
 
 /** The cost accounting carried through every model call of one item run (Milestone 17). */
 interface CostAccount {
@@ -312,6 +346,60 @@ function writeItemBudgetAudit(
   });
 }
 
+/**
+ * Writes the audit entry that links Stream's trace to the Flow run that
+ * answered the escalation (Milestone 20). Carries the escalation cause and the
+ * resolution's `run_id`/`outcome` under the item's correlation id, so the two
+ * audit trails read as one story.
+ */
+function writeEscalationAudit(
+  deps: ItemPipelineDeps,
+  config: ItemPipelineConfig,
+  item: WorkItem,
+  cause: EscalationCause,
+  resolution: ResolutionEnvelope,
+  now: () => number
+): void {
+  deps.store.createAuditEntry({
+    id: `escalation_${item.correlation_id}`,
+    timestamp: now(),
+    correlationId: item.correlation_id,
+    minionType: config.act.agent,
+    teamId: config.item_type,
+    serverAlias: 'escalation',
+    toolName: 'bridge',
+    params: { cause, run_id: resolution.run_id, outcome: resolution.outcome },
+    status: resolution.outcome === 'resolved' ? 'success' : 'error',
+    latencyMs: 0,
+  });
+}
+
+/**
+ * Routes an escalation to its terminal outcome. With an emitter wired, the
+ * pipeline assembles a signed `escalation/v1` envelope from the item and its
+ * attempt history, delivers it, and returns `bridged` with the verified
+ * resolution; without one, it returns `escalated` (Milestone 16 behaviour).
+ */
+async function escalateItem(
+  config: ItemPipelineConfig,
+  deps: ItemPipelineDeps,
+  item: WorkItem,
+  cause: EscalationCause,
+  history: AttemptRecord[],
+  results: VerificationResult[],
+  attempts: number,
+  reason: string,
+  now: () => number
+): Promise<PipelineOutcome> {
+  if (!deps.escalate) {
+    return { status: 'escalated', correlationId: item.correlation_id, attempts, results, reason };
+  }
+  const envelope = assembleEscalationEnvelope({ item, history, cause, secret: deps.bridgeSecret ?? deps.secret, now });
+  const { resolution } = await deps.escalate(envelope);
+  writeEscalationAudit(deps, config, item, cause, resolution, now);
+  return { status: 'bridged', correlationId: item.correlation_id, attempts, results, cause, resolution };
+}
+
 async function commitEffect(
   config: ItemPipelineConfig,
   deps: ItemPipelineDeps,
@@ -346,12 +434,15 @@ async function commitEffect(
  * Drives one work item through its pipeline to exactly one terminal outcome:
  * `committed` (chain passed and the gateway committed), `dead_lettered`
  * (chain never passed and `on_failure` is `dead_letter`, or the item crossed
- * its `max_cost_usd` cap as `BUDGET_EXCEEDED`), or `escalated` (chain never
- * passed under `on_failure: escalate`, or the commit was refused). The loop is
- * bounded by `max_attempts`; every attempt's verification results are written
- * to the audit trail under the item's correlation id, and every model call is
- * priced against the item's cost ledger (Milestone 17) so a runaway item halts
- * itself rather than the queue around it.
+ * its `max_cost_usd` cap as `BUDGET_EXCEEDED`), `escalated` (chain never
+ * passed under `on_failure: escalate`, or the commit was refused — with no
+ * emitter wired), or `bridged` (the same escalation routes, delivered to
+ * Flow's intake via the Milestone 20 emitter, closed with a verified
+ * resolution). The loop is bounded by `max_attempts`; every attempt's
+ * verification results are written to the audit trail under the item's
+ * correlation id, and every model call is priced against the item's cost
+ * ledger (Milestone 17) so a runaway item halts itself rather than the queue
+ * around it.
  */
 export async function runItemPipeline(
   config: ItemPipelineConfig,
@@ -373,6 +464,7 @@ export async function runItemPipeline(
 
   let lastResults: VerificationResult[] = [];
   let attempts = 0;
+  const attemptHistory: AttemptRecord[] = [];
 
   try {
     const facts = await classify(config, deps, item, token, account);
@@ -401,19 +493,24 @@ export async function runItemPipeline(
 
       lastResults = chain.results;
       writeVerificationAudit(deps, config, item, chain.results, attempt, now);
+      attemptHistory.push({ attempt, at: now(), verification: chain.composite });
 
       if (chain.passed) {
         const commitResult = await commitEffect(config, deps, item, token, action, chain.composite, now);
         if (commitResult.committed) {
           return { status: 'committed', correlationId, attempts: attempt, results: chain.results };
         }
-        return {
-          status: 'escalated',
-          correlationId,
-          attempts: attempt,
-          results: chain.results,
-          reason: commitResult.refused ?? 'commit refused',
-        };
+        return escalateItem(
+          config,
+          deps,
+          item,
+          'complexity',
+          attemptHistory,
+          chain.results,
+          attempt,
+          commitResult.refused ?? 'commit refused',
+          now
+        );
       }
 
       feedback = errorFindings(chain.results).map((finding) => `${finding.id}: ${finding.message}`);
@@ -428,7 +525,17 @@ export async function runItemPipeline(
 
   const reason = `verification failed after ${config.max_attempts} attempt(s)`;
   if (config.on_failure === 'escalate') {
-    return { status: 'escalated', correlationId, attempts: config.max_attempts, results: lastResults, reason };
+    return escalateItem(
+      config,
+      deps,
+      item,
+      'retry_exceeded',
+      attemptHistory,
+      lastResults,
+      config.max_attempts,
+      reason,
+      now
+    );
   }
   return { status: 'dead_lettered', correlationId, attempts: config.max_attempts, results: lastResults, reason };
 }

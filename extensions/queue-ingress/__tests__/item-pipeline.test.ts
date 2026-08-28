@@ -176,6 +176,70 @@ describe('runItemPipeline (Milestone 16)', () => {
     expect(outcome.reason).toBe('no connector mounted');
   });
 
+  it('bridges to Flow when on_failure is escalate and an emitter is wired', async () => {
+    const goose = makeGoose({
+      refund_classifier: { output: { order_id: 'R-1', reason: 'duplicate charge' } },
+      refund_processor: { output: { order_id: 'R-1', amount_usd: 100, reason: 'duplicate charge' } },
+    });
+    const escalate = jest.fn(async () => ({
+      resolution: {
+        correlation_id: 'corr-1',
+        run_id: 'run_1',
+        outcome: 'resolved' as const,
+        effects: [],
+        summary: 'done',
+        signature: 'sig',
+      },
+    }));
+    const store = { createAuditEntry: jest.fn(), listAuditEntries: jest.fn(() => []) } as unknown as SessionStore;
+
+    const outcome = await runItemPipeline(
+      baseConfig({ on_failure: 'escalate' }),
+      makeDeps({ goose, escalate, bridgeSecret: 'bridge-secret', store }),
+      item
+    );
+
+    expect(outcome.status).toBe('bridged');
+    expect(outcome.cause).toBe('retry_exceeded');
+    expect(escalate).toHaveBeenCalledTimes(1);
+    expect(escalate.mock.calls[0][0].correlation_id).toBe('corr-1');
+
+    // The escalation was audited under the item's correlation id.
+    const escalationAudit = store.createAuditEntry.mock.calls.map((call) => call[0]).filter(
+      (entry) => entry.serverAlias === 'escalation'
+    );
+    expect(escalationAudit).toHaveLength(1);
+    expect(escalationAudit[0].params).toEqual({ cause: 'retry_exceeded', run_id: 'run_1', outcome: 'resolved' });
+  });
+
+  it('bridges to Flow with cause complexity when the commit is refused', async () => {
+    const goose = makeGoose({
+      refund_classifier: { output: { order_id: 'R-1', reason: 'duplicate charge' } },
+      refund_processor: { output: { order_id: 'R-1', amount_usd: 50, reason: 'duplicate charge' } },
+    });
+    const commit = jest.fn().mockResolvedValue({ committed: false, refused: 'no connector mounted' });
+    // No `bridgeSecret` here exercises the identity-secret fallback, and the
+    // unresolved outcome exercises the error audit status.
+    const escalate = jest.fn(async () => ({
+      resolution: {
+        correlation_id: 'corr-1',
+        run_id: 'run_2',
+        outcome: 'unresolved' as const,
+        effects: [],
+        summary: 'still unresolved',
+        reason: 'missing documents',
+        signature: 'sig',
+      },
+    }));
+
+    const outcome = await runItemPipeline(baseConfig(), makeDeps({ goose, commit, escalate }), item);
+
+    expect(outcome.status).toBe('bridged');
+    expect(outcome.cause).toBe('complexity');
+    if (outcome.status !== 'bridged') return;
+    expect(outcome.resolution.outcome).toBe('unresolved');
+  });
+
   it('skips classification when no classify step is configured', async () => {
     const goose = makeGoose({
       refund_processor: { output: { order_id: 'R-1', amount_usd: 50, reason: 'duplicate charge' } },
