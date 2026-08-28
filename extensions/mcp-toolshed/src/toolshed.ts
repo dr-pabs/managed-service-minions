@@ -307,14 +307,14 @@ export async function verifyAndExecuteTool(
       return auditRejectedIdentity(state, input, serverAlias, toolName, `invalid minion token: ${verified.reason}`);
     }
     const ctx: ToolContext = {
-      // teamId is derived from the token's sessionId, never from
-      // input.legacyTeamId — the token payload stays at the pinned
-      // three-field format {minionType, sessionId, correlationId}, and
+      // teamId is derived from the token's scope_id (a work-item or session
+      // id), never from input.legacyTeamId — the token payload is the pinned
+      // identity/v1 claim set {agent_id, scope_id, correlation_id}, and
       // Milestone 6 (M4) adds a distinct teamId to approval records.
-      teamId: verified.payload.sessionId,
-      minionType: verified.payload.minionType,
-      sessionId: verified.payload.sessionId,
-      correlationId: verified.payload.correlationId,
+      teamId: verified.payload.scope_id,
+      minionType: verified.payload.agent_id,
+      sessionId: verified.payload.scope_id,
+      correlationId: verified.payload.correlation_id,
       attempt: input.attempt,
     };
     return executeTool(ctx, serverAlias, toolName, params);

@@ -10,9 +10,9 @@ import type { MinionTokenInput } from '../minion-token.js';
  * accept vector byte-for-byte and `verifyMinionToken` must reject every
  * reject vector with its labeled reason.
  *
- * The vectors carry the contract claim names (`agent_id`, `scope_id`,
- * `correlation_id`); this suite maps them onto `MinionTokenPayload`'s current
- * field names until Milestone 13 of forge-ops.execplan.md renames the fields.
+ * As of Milestone 13 of forge-ops.execplan.md, `MinionTokenPayload` carries the
+ * contract claim names natively (`agent_id`, `scope_id`, `correlation_id`), so
+ * this suite feeds the vector payloads straight through with no name-mapping.
  */
 
 interface IdentityVectorPayload {
@@ -75,12 +75,12 @@ function loadVectors(): { accept: IdentityVector[]; reject: IdentityVector[] } {
   };
 }
 
-/** Contract claim names → the current MinionTokenPayload field names. */
+/** The contract claim names are now `MinionTokenPayload`'s own field names. */
 function toTokenInput(payload: IdentityVectorPayload): MinionTokenInput {
   return {
-    minionType: payload.agent_id,
-    sessionId: payload.scope_id,
-    correlationId: payload.correlation_id,
+    agent_id: payload.agent_id,
+    scope_id: payload.scope_id,
+    correlation_id: payload.correlation_id,
   };
 }
 
@@ -107,15 +107,15 @@ describeVectors('identity/v1 contract vectors (forge-contracts)', () => {
       expect(minted).toBe(vector.token);
     });
 
-    it('is accepted by verifyMinionToken with the mapped claims round-tripping', () => {
+    it('is accepted by verifyMinionToken with the claims round-tripping', () => {
       jest.useFakeTimers();
       jest.setSystemTime(vector.now_ms);
       const result = verifyMinionToken(vector.token, vector.secret);
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.payload.minionType).toBe(vector.payload.agent_id);
-        expect(result.payload.sessionId).toBe(vector.payload.scope_id);
-        expect(result.payload.correlationId).toBe(vector.payload.correlation_id);
+        expect(result.payload.agent_id).toBe(vector.payload.agent_id);
+        expect(result.payload.scope_id).toBe(vector.payload.scope_id);
+        expect(result.payload.correlation_id).toBe(vector.payload.correlation_id);
         expect(result.payload.exp).toBe(vector.payload.exp);
       }
     });

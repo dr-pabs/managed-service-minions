@@ -6,39 +6,73 @@ const SECRET = 'test-secret-do-not-use-in-prod';
 describe('mintMinionToken / verifyMinionToken', () => {
   it('round-trips a minted token', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET
     );
     const result = verifyMinionToken(token, SECRET);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.payload.minionType).toBe('code_reviewer');
-      expect(result.payload.sessionId).toBe('sess_1');
-      expect(result.payload.correlationId).toBe('corr_1');
+      expect(result.payload.agent_id).toBe('code_reviewer');
+      expect(result.payload.scope_id).toBe('item_1');
+      expect(result.payload.correlation_id).toBe('corr_1');
       expect(typeof result.payload.exp).toBe('number');
     }
   });
 
   it('produces the pinned format: base64url(json).base64url(hmac)', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET
     );
     const parts = token.split('.');
     expect(parts).toHaveLength(2);
     const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
-    expect(decoded).toMatchObject({ minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' });
+    expect(decoded).toMatchObject({ agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' });
     expect(typeof decoded.exp).toBe('number');
+    // Claim order is pinned by the identity/v1 vectors.
+    expect(Object.keys(decoded)).toEqual(['agent_id', 'scope_id', 'correlation_id', 'exp']);
+  });
+
+  it('mints under the canonical claim names when given legacy claim names (migration shim)', () => {
+    const token = mintMinionToken(
+      { minionType: 'code_reviewer', sessionId: 'item_1', correlationId: 'corr_1' },
+      SECRET
+    );
+    const decoded = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
+    // The legacy input names never reach the wire — the token is canonical.
+    expect(decoded).toMatchObject({ agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' });
+    expect(decoded.minionType).toBeUndefined();
+    const result = verifyMinionToken(token, SECRET);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.agent_id).toBe('code_reviewer');
+      expect(result.payload.scope_id).toBe('item_1');
+      expect(result.payload.correlation_id).toBe('corr_1');
+    }
+  });
+
+  it('verifies a legacy-named token, normalizing its claims (migration shim)', () => {
+    const legacyPayloadB64 = Buffer.from(
+      JSON.stringify({ minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1', exp: 4102444800000 })
+    ).toString('base64url');
+    const sigB64 = createHmac('sha256', SECRET).update(legacyPayloadB64).digest('base64url');
+    const result = verifyMinionToken(`${legacyPayloadB64}.${sigB64}`, SECRET);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.agent_id).toBe('code_reviewer');
+      expect(result.payload.scope_id).toBe('sess_1');
+      expect(result.payload.correlation_id).toBe('corr_1');
+    }
   });
 
   it('rejects a token whose payload has been tampered with', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET
     );
     const [payloadB64, sigB64] = token.split('.');
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
-    payload.minionType = 'security_auditor';
+    payload.agent_id = 'security_auditor';
     const tamperedPayloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
     const tampered = `${tamperedPayloadB64}.${sigB64}`;
 
@@ -51,7 +85,7 @@ describe('mintMinionToken / verifyMinionToken', () => {
 
   it('rejects a token signed with the wrong secret', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       'wrong-secret'
     );
     const result = verifyMinionToken(token, SECRET);
@@ -60,7 +94,7 @@ describe('mintMinionToken / verifyMinionToken', () => {
 
   it('rejects an expired token', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET,
       -1
     );
@@ -108,7 +142,19 @@ describe('mintMinionToken / verifyMinionToken', () => {
   });
 
   it('rejects a token whose payload is missing required fields', () => {
-    const payloadB64 = Buffer.from(JSON.stringify({ minionType: 'x' })).toString('base64url');
+    const payloadB64 = Buffer.from(JSON.stringify({ agent_id: 'x' })).toString('base64url');
+    const sigB64 = createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
+    const result = verifyMinionToken(`${payloadB64}.${sigB64}`, SECRET);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('missing required fields');
+    }
+  });
+
+  it('rejects a token whose payload has a valid exp but an incomplete claim set', () => {
+    // exp is numeric (passes the exp guard) but neither the canonical nor the
+    // legacy claim triple is complete — the shim must still reject it.
+    const payloadB64 = Buffer.from(JSON.stringify({ agent_id: 'x', exp: 4102444800000 })).toString('base64url');
     const sigB64 = createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
     const result = verifyMinionToken(`${payloadB64}.${sigB64}`, SECRET);
     expect(result.ok).toBe(false);
@@ -127,7 +173,7 @@ describe('mintMinionToken / verifyMinionToken', () => {
   it('uses a default TTL when none is provided', () => {
     const before = Date.now();
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET
     );
     const result = verifyMinionToken(token, SECRET);
@@ -140,7 +186,7 @@ describe('mintMinionToken / verifyMinionToken', () => {
 
   it('rejects when signature length differs from expected (different byte length)', () => {
     const token = mintMinionToken(
-      { minionType: 'code_reviewer', sessionId: 'sess_1', correlationId: 'corr_1' },
+      { agent_id: 'code_reviewer', scope_id: 'item_1', correlation_id: 'corr_1' },
       SECRET
     );
     const [payloadB64] = token.split('.');
