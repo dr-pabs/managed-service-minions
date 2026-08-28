@@ -8,6 +8,7 @@ export default {
   },
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^framework-core$': '<rootDir>/../../packages/framework-core/src/index.ts',
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],

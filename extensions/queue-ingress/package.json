@@ -5,6 +5,12 @@
   "description": "Service Bus work-item queue ingress for the Minions Agent Framework (Milestone 15): consumes typed WorkItem envelopes with redelivery-safe idempotency and dead-lettering, driving the same orchestrator runner chat and webhook ingresses use.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./item-pipeline.js": "./dist/item-pipeline.js",
+    "./pipeline-config.js": "./dist/pipeline-config.js",
+    "./work-item.js": "./dist/work-item.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node ./dist/index.js",
@@ -13,11 +19,13 @@
   "dependencies": {
     "@azure/service-bus": "^7.9.0",
     "framework-core": "workspace:*",
+    "js-yaml": "^4.1.0",
     "mcp-toolshed": "workspace:*",
     "orchestrator": "workspace:*"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.15.17",
     "jest": "^29.7.0",
     "ts-jest": "^29.4.11",

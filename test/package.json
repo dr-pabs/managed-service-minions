@@ -24,6 +24,7 @@
   "dependencies": {
     "framework-core": "workspace:*",
     "orchestrator": "workspace:*",
+    "queue-ingress": "workspace:*",
     "slack-bot": "workspace:*",
     "webhook-ingress": "workspace:*"
   }

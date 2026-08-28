@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.forge.dev/schemas/refund-action-output.json",
+  "title": "Refund action output",
+  "type": "object",
+  "properties": {
+    "order_id": { "type": "string" },
+    "amount_usd": { "type": "number" },
+    "reason": { "type": "string" }
+  },
+  "required": ["order_id", "amount_usd", "reason"],
+  "additionalProperties": false
+}

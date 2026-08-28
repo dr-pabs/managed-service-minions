@@ -1,0 +1,35 @@
+# Declarative item pipelines (Milestone 16). One entry per Stream item_type:
+# a bounded classify -> act -> verify -> commit/escalate sequence, expressed as
+# configuration plus prompts. The pipeline engine is generic; this file is the
+# recipe. `max_attempts` bounds the act/verify retry loop (unbounded iteration
+# belongs to Flow, never here).
+item_pipelines:
+  refund_request:
+    max_attempts: 2
+    on_failure: dead_letter
+    classify:
+      agent: refund_classifier
+      system_prompt: refund-classify.md
+    act:
+      agent: refund_processor
+      system_prompt: refund-act.md
+      output_schema: refund-action-output.json
+    verify:
+      verifier: composite:refund_request
+      schema: true
+      reconcile_checks:
+        - server_alias: payments
+          tool_name: payments_get_charge
+          params:
+            order_id: "$output.order_id"
+          assert:
+            read_field: amount_usd
+            output_field: amount_usd
+      judge:
+        agent: refund_judge
+        system_prompt: refund-judge.md
+        sample_percent: 0
+    commit:
+      effect_type: payment.refund
+      target_system: payments
+      reversibility: compensatable
