@@ -87,7 +87,8 @@ resource "azurerm_container_app" "orchestrator" {
   }
 }
 
-# Milestone 15: the queue-ingress is the Service Bus work-queue consumer. It
+# Milestone 15 of the forge-ops execplan (forge-contracts repo): the
+# queue-ingress is the Service Bus work-queue consumer. It
 # runs the same orchestrator runner the chat/webhook ingresses use (in-process)
 # and is the KEDA scaling target — scaled on the work queue's depth (queue-mode
 # metadata), which replaced the topic+subscription scaler that previously lived
@@ -255,7 +256,8 @@ resource "azurerm_container_app" "toolshed" {
   }
 
   template {
-    # Milestone 18 (ADR-026): the rate limiter's token buckets and circuit
+    # Milestone 18 of the forge-ops execplan, forge-contracts repo
+    # (ADR-026): the rate limiter's token buckets and circuit
     # breaker state moved from process memory to Azure Table Storage
     # (`createSharedGovernanceStateStore`), so the toolshed can run more than
     # one replica — every replica reads/writes the same `GovernanceState`
@@ -419,7 +421,9 @@ resource "azurerm_container_app" "dashboard" {
   }
 }
 
-# Milestone 14 (review finding M7 "the dashboard has no auth", closed):
+# Milestone 14 of the 2026-07 Minions remediation plan (review finding M7
+# "the dashboard has no auth", closed; see the README roadmap table — not
+# the forge-ops execplan's numbering):
 # production front door for the dashboard is Azure Container Apps' built-in
 # Entra ID authentication ("easy auth"), NOT `DASHBOARD_AUTH_TOKEN` — that
 # token is the local-dev fallback the app itself enforces
@@ -542,7 +546,7 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0"
     }
-    # Milestone 14: azapi_resource.dashboard_easy_auth needs its own
+    # Remediation-plan Milestone 14: azapi_resource.dashboard_easy_auth needs its own
     # required_providers block (same as modules/ai_foundry) -- Terraform
     # does not implicitly propagate a non-default-namespace provider's
     # source address ("azure/azapi", not "hashicorp/azapi") down into a

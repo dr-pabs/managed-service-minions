@@ -7,7 +7,8 @@ resource "azurerm_servicebus_namespace" "main" {
   tags = var.tags
 }
 
-# Milestone 15: the work queue is now first-class. A single Service Bus queue
+# Milestone 15 of the forge-ops execplan (forge-contracts repo): the work
+# queue is now first-class. A single Service Bus queue
 # (not a topic + subscriptions) is what the queue-ingress consumes; the KEDA
 # scaler targets its depth directly. `max_delivery_count = 3` mirrors the
 # queue-ingress processor's default poison threshold, so an item that fails

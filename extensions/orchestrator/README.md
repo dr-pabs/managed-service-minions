@@ -9,7 +9,8 @@ review finding M5 / feature F8). Replaces the Slack/Teams bots'
    `schemas/intent.json`.
 2. Looks up the ordered minion DAG for that intent in `rules/intents.yaml`.
 3. Mints a short-lived, HMAC-signed minion token per DAG step
-   (`framework-core`'s `mintMinionToken`, Milestone 3).
+   (`framework-core`'s `mintMinionToken`, Milestone 3) — the `identity/v1`
+   claim set `{agent_id, scope_id, correlation_id, exp}` (ADR-029).
 4. Runs each minion via Goose with its own `agents/*.md` prompt, wrapped in
    `framework-core`'s `runWithContract` (Milestone 10: schema validation
    with one retry-with-feedback).

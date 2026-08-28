@@ -57,6 +57,8 @@ The design authority lives in [`./docs/high-level-design.md`](./docs/high-level-
 | **Scheduled jobs** | Cron-driven recipes such as daily PR review and ticket polling |
 | **Immutable audit trail** | Every tool call captured with a correlation ID in Azure Table Storage |
 | **Human-in-the-loop** | Destructive actions (merge, close ticket, deploy) pause for human approval |
+| **Work-item queue ingress** | Typed `WorkItem` envelopes consumed from a single Service Bus queue with consumer-side idempotency and reason-coded dead-lettering (ADR-027) |
+| **Effect gateway** | Agents draft side effects; only the credential-holding gateway commits them, gated on verification evidence and approval class (ADR-028) |
 | **Low-cost durable storage** | SQLite + Azure Table Storage + Azure Blob — ~$2–5/month at moderate scale |
 
 ---
@@ -76,11 +78,11 @@ of this repository, each with its backing test suite:
 | **Identity tokens** (`identity/v1`) | Agent identity tokens minted/verified with the contract claim set; no self-reported identity | `packages/framework-core/src/__tests__/identity-contract.test.ts`, `minion-token.test.ts` |
 | **Effect gateway** (`effects/v1`) | Agents draft side effects; only the gateway commits them, gated on verification evidence + approval class; irreversible effects refuse agent actors | `extensions/mcp-toolshed/src/__tests__/effect-gateway.test.ts` |
 | **Work-item queue ingress** | Typed `WorkItem` envelopes consumed from Service Bus with idempotent redelivery and reason-coded dead-lettering | `extensions/queue-ingress/__tests__/*.test.ts` |
-| **Item pipelines** | Declarative classify→act→verify→commit/escalate chains with per-item verification | `extensions/queue-ingress/__tests__/item-pipeline.test.ts`, `test/src/e2e-item-pipeline.test.ts` |
-| **Cost control** (`budget/v1`) | Hard per-item `max_cost_usd` (item halts, never the queue) and a per-UTC-day budget that pauses consumption | `extensions/queue-ingress/__tests__/cost-control.test.ts` |
+| **Item pipelines** | Declarative classify→act→verify→commit/escalate chains with per-item verification (library-complete; production wiring pending — see ADR-030) | `extensions/queue-ingress/__tests__/item-pipeline.test.ts`, `test/src/e2e-item-pipeline.test.ts` |
+| **Cost control** (`budget/v1`) | Hard per-item `max_cost_usd` (item halts, never the queue; library-complete, production wiring pending) and a per-UTC-day budget that pauses consumption (wired in the production consumer) | `extensions/queue-ingress/__tests__/cost-control.test.ts` |
 | **Multi-replica governance state** | Rate-limit and breaker state shared across replicas (ADR-026 supersedes ADR-025) | `extensions/mcp-toolshed/src/__tests__/shared-governance-state.test.ts` |
 | **Sampling QA loop** | Post-hoc human review of auto-commits turns a disagreement rate into an auto-commit circuit breaker per effect type | `extensions/mcp-toolshed/src/__tests__/sampling-qa.test.ts` |
-| **Escalation bridge** (`escalation/v1`) | A failing item escalates into a signed envelope, runs in Flow, and closes on a signed resolution under one correlation id | `extensions/queue-ingress/__tests__/escalation.test.ts`, `test/src/bridge-e2e.test.ts` |
+| **Escalation bridge** (`escalation/v1`) | A failing item escalates into a signed envelope, runs in Flow, and closes on a signed resolution under one correlation id (emitter library-complete; production wiring pending — see ADR-033) | `extensions/queue-ingress/__tests__/escalation.test.ts`, `test/src/bridge-e2e.test.ts` |
 | **1000-item soak** | At-most-once commits and complete dead-letter accounting over a seeded duplicate/poison run | `extensions/queue-ingress/soak/soak.test.ts` (`pnpm --filter ./extensions/queue-ingress test:soak`) |
 
 The full design and milestone history live in
@@ -94,38 +96,50 @@ in the contracts repository.
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Slack    Teams    Web UI    Scheduled / Cron                       │
-│   Bot      Bot                                                         │
-└────────────────────┬──────────────────────────────────────────────────┘
-                     │  ACP / WebSocket / HTTP
+│   Bot      Bot                                                      │
+│                                                                     │
+│  GitHub/ADO Webhooks ──► webhook-ingress                            │
+│  Service Bus work queue (minion-tasks) ──► queue-ingress            │
+│                          (KEDA scale target, DLQ by reason code)    │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │  ACP / WebSocket / HTTP / WorkItem envelopes
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Goose Orchestrator (plugin agent)                                   │
-│  • Intent classification                                             │
-│  • Task decomposition (DAG)                                          │
-│  • Minion lifecycle: delegate → monitor → collect → synthesize       │
-│  • Correlation-ID propagation                                        │
-│  • Human approval gating                                             │
-└────────────────────┬──────────────────────────────────────────────────┘
+│  Goose Orchestrator (plugin agent / orchestrator runner)            │
+│  • Intent classification                                            │
+│  • Task decomposition (DAG)                                         │
+│  • Minion lifecycle: delegate → monitor → collect → synthesize      │
+│  • Correlation-ID propagation                                       │
+│  • Human approval gating                                            │
+└────────────────────┬────────────────────────────────────────────────┘
                      │ delegate(async: true)
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Minion Pool (code-explorer, code-reviewer, pr-crafter,              │
-│  ticket-analyst, security-auditor)                                   │
-└────────────────────┬──────────────────────────────────────────────────┘
-                     │ execute_tool
+│  Minion Pool (code-explorer, code-reviewer, code-writer,            │
+│  pr-crafter, ticket-analyst, security-auditor, test-writer)         │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ execute_tool (identity/v1 minion token)
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  MCP Toolshed                                                        │
-│  • Per-minion allowlists                                             │
-│  • Path scoping for filesystem tools                                 │
-│  • Rate limiting and circuit breakers per MCP server                 │
-│  • Audit logging and tool-call caching                               │
-└────────────────────┬──────────────────────────────────────────────────┘
+│  MCP Toolshed                                                       │
+│  • Per-minion allowlists                                            │
+│  • Path scoping for filesystem tools                                │
+│  • Rate limiting and circuit breakers per MCP server                │
+│    (state shared across replicas via Azure Tables, ADR-026)         │
+│  • Audit logging and tool-call caching                              │
+│  • Effect gateway (in-process): draft_effect / commit_effect /      │
+│    discard_effect — evidence-gated, approval-classed commits        │
+│    with post-hoc sampling QA (ADR-028/032)                          │
+└────────────────────┬────────────────────────────────────────────────┘
                      │
          ┌───────────┼───────────┬──────────────┐
          ▼           ▼           ▼              ▼
       GitHub    Azure DevOps  ServiceNow    Jira
       Slack     Teams         Filesystem    Shell
+
+  Escalation bridge (ADR-033): an item exceeding its retry/cost/complexity
+  thresholds leaves Stream as a signed escalation/v1 envelope to the Forge
+  (Flow) intake and closes on a signed resolution under one correlation id.
 ```
 
 - The **plugin** is a git-installable bundle of Markdown/JSON skills and agents. It is loaded with `minions plugin install`.
@@ -141,26 +155,33 @@ See [`./docs/logical-architecture.md`](./docs/logical-architecture.md), [`./docs
 ```text
 .
 ├── .plugin/                    # Goose plugin manifest
+├── adrs/                       # Architecture Decision Records (index: adrs/readme.md)
 ├── agents/                     # Orchestrator and minion agent prompts
 ├── skills/                     # Reusable skills (intent, decomposition, synthesis, ...)
 ├── commands/                   # Slash-command recipes
+├── recipes/                    # Declarative Stream item pipelines (item-pipelines.yaml, prompts/, schemas/)
 ├── rules/                      # Allowlists, governance, model tiers
-├── hooks/                      # Lifecycle hooks
 ├── schemas/                    # JSON output schemas for minions
+├── mocks/                      # Mock MCP servers for local dev (GitHub, ADO, ServiceNow, Jira, shell)
 ├── packages/
-│   └── framework-core/         # Shared TypeScript library
+│   └── framework-core/         # Shared TypeScript library (identity tokens, contracts, quarantine, ...)
 ├── extensions/
-│   ├── mcp-toolshed/           # Governed MCP proxy
+│   ├── orchestrator/           # Orchestrator runner (intent → minion DAG → synthesis)
+│   ├── mcp-toolshed/           # Governed MCP proxy + effect gateway + sampling QA
+│   ├── mcp-github/             # GitHub MCP client
+│   ├── mcp-azure-devops/       # Azure DevOps MCP client
+│   ├── mcp-servicenow/         # ServiceNow MCP client
+│   ├── mcp-jira/               # Jira MCP client
 │   ├── slack-bot/              # Slack ingress/egress MCP server
 │   ├── teams-bot/              # Teams ingress/egress MCP server
 │   ├── webhook-ingress/        # GitHub/ADO event ingress
-│   ├── queue-ingress/          # Service Bus work-item queue ingress
+│   ├── queue-ingress/          # Service Bus work-item queue ingress + item-pipeline libraries
 │   └── agent-dashboard/        # Dashboard backend MCP server
 ├── infra/                      # Azure Terraform modules
 ├── test/                       # Integration, E2E, prompt-quality, chaos tests
 ├── .github/workflows/          # CI/CD
 └── docs/
-    └── execplan/execution-plan.md   # Implementation plan
+    └── execplan/execution-plan.md   # Original v1 implementation plan (historical)
 ```
 
 ---
@@ -246,6 +267,8 @@ The mock servers implement the MCP protocol (SSE transport) over HTTP, compatibl
 
 To stop: `Ctrl-C` (the dev script handles cleanup), or `docker compose --profile dev down`.
 
+**Feeding the work queue locally:** without `SERVICE_BUS_CONNECTION_STRING`, the queue-ingress starts (with a loud warning) on an `InMemoryWorkItemQueue` — an in-process queue with no external producer endpoint. To drive it locally, enqueue `WorkItem` envelopes from the same process via the exported `InMemoryWorkItemQueue.enqueue(...)` (a small script importing `queue-ingress`, or the package's tests — `extensions/queue-ingress/__tests__/` and the 1000-item soak do exactly this). To exercise the real broker path, set `SERVICE_BUS_CONNECTION_STRING` and send to the `minion-tasks` queue.
+
 ### 1. Install the plugin
 
 ```bash
@@ -312,12 +335,14 @@ minions recipe list
 
 | Layer | Command | Notes |
 |---|---|---|
-| Unit | `pnpm test --coverage` | 95% branch/line, 100% function/statement thresholds on `packages/` and `extensions/` |
+| Unit | `pnpm test --coverage` | 95% branch/line, 100% function/statement thresholds on `packages/` and `extensions/` (skipped on filtered runs only — ADR-023, 2026-08-28 amendment) |
 | Integration | `pnpm test:integration` | Mock MCP servers and SQLite-backed flows |
 | E2E | `pnpm test:e2e` | Staging-environment smoke tests |
 | Prompt quality | `pnpm test:prompts -- --minion <name> ...` | Compare candidate prompts against baselines |
+| Soak | `pnpm --filter ./extensions/queue-ingress test:soak` | 1000-item queue soak: zero double-commits, exact dead-letter accounting (Milestone 21) |
+| Contract conformance | `FORGE_CONTRACTS_DIR=<forge-contracts checkout> pnpm -r test` | Replays the cross-language `identity/v1` vectors from the forge-contracts repo; without the checkout the suite skips with a loud banner (ADR-029) |
 
-The unit-test suite uses Jest with `--experimental-vm-modules` and ts-jest ESM support. The `test/` workspace holds integration, E2E, prompt-quality, and chaos harnesses.
+The unit-test suite uses Jest with `--experimental-vm-modules` and ts-jest ESM support. The `test/` workspace holds integration, E2E, prompt-quality, and chaos harnesses, plus the cross-package Stream e2e tests (`test/src/e2e-item-pipeline.test.ts`, `test/src/bridge-e2e.test.ts` — the latter needs a live Forge intake via `FORGE_INTAKE_URL`/`FORGE_BRIDGE_SECRET`).
 
 ---
 
@@ -367,12 +392,12 @@ See [`adrs/adr-005-tool-allowlisting-per-minion.md`](./adrs/adr-005-tool-allowli
 
 ## Roadmap
 
-The original v1 build plan is in [`docs/execplan/execution-plan.md`](./docs/execplan/execution-plan.md) (superseded — see below). The authoritative, up-to-date plan is the remediation ExecPlan, [`docs/execplan/2026-07-08-minions-remediation-and-features.md`](./docs/execplan/2026-07-08-minions-remediation-and-features.md), which fixed the Critical/High/Medium findings from the 2026-07-08 code review and delivered the feature set below across 19 milestones (0–18), all complete as of this writing.
+The original v1 build plan is in [`docs/execplan/execution-plan.md`](./docs/execplan/execution-plan.md) (superseded, kept as history). The remediation work that followed the 2026-07-08 code review delivered the milestone table below (milestones 0–18, all complete). The authoritative, living plan — including the Forge Ops Stream milestones 13–21 that followed the remediation — is [`forge-ops.execplan.md`](https://github.com/dr-pabs/forge-contracts/blob/main/forge-ops.execplan.md) in the forge-contracts repository; the milestone numbers in the table below are the *remediation* plan's numbering, not forge-ops's.
 
 | Milestone | Status | Description |
 |---|---|---|
 | **Milestones 0–6** | ✅ Complete | Workspace bootstrap; config integrity (minion naming fix); TTL/bounded tool-call cache; minion identity tokens (no self-reported identity); path-scope + shell-command governance hardening; async-first approval with Slack/Teams notification; per-server rate limits and durable circuit breakers |
-| **Milestone 7** | ✅ Complete | Single-replica governance state made honest in Terraform and docs (`adrs/adr-025-single-replica-governance-state.md`) — toolshed/bots/dashboard pinned to `max_replicas = 1`; only the orchestrator scales (1–5, KEDA on Service Bus queue depth) |
+| **Milestone 7** | ✅ Complete | Single-replica governance state made honest in Terraform and docs (`adrs/adr-025-single-replica-governance-state.md`) — toolshed/bots/dashboard pinned to `max_replicas = 1`; only the orchestrator scales (1–5, KEDA on Service Bus queue depth). *Since superseded by ADR-026 and forge-ops Milestones 15+18: the toolshed now scales 1–5 on shared Azure Tables governance state, and the KEDA scale target moved to the queue-ingress.* |
 | **Milestone 8** | ✅ Complete | Cloud audit trail hardening: durable retry, secret redaction |
 | **Milestone 9** | ✅ Complete | Session lifecycle: Slack thread/channel disambiguation, `updatedAt`, expiry |
 | **Milestone 10** | ✅ Complete | Runtime output-contract enforcement (JSON Schema validation, one governed retry) |
@@ -385,7 +410,7 @@ The original v1 build plan is in [`docs/execplan/execution-plan.md`](./docs/exec
 | **Milestone 17** | ✅ Complete | Rules hot-reload behind `TOOLSHED_WATCH_RULES=1`, validated before swap |
 | **Milestone 18** | ✅ Complete | Hygiene sweep: honest CI coverage gate, naming consistency, scaffolding cleanup, dashboard `?token=` scoped to `/api/events` only, this table |
 
-See the remediation ExecPlan's `Progress`, `Decision Log`, and `Outcomes & Retrospective` sections for the full history, evidence, and rationale behind every milestone above.
+See the forge-ops ExecPlan's `Progress`, `Decision Log`, and `Outcomes & Retrospective` sections (forge-contracts repo) for the full history, evidence, and rationale — for the milestones above and for the Forge Ops Stream milestones (13–21) summarised in the [Forge Ops (Stream)](#forge-ops-stream) section.
 
 ---
 

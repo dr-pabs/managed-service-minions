@@ -20,7 +20,7 @@ variable "sku" {
 }
 
 variable "queue_name" {
-  description = "Name of the work-item queue consumed by the queue-ingress (Milestone 15)."
+  description = "Name of the work-item queue consumed by the queue-ingress (Milestone 15 of the forge-ops execplan, forge-contracts repo)."
   type        = string
   default     = "minion-tasks"
 }

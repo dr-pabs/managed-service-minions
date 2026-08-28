@@ -211,7 +211,10 @@ in the contracts repository.
 | **AI inference** | LLM conversation loop | Model routing by configurable tier (fast, reasoning, code_review, code_generation, security) | — |
 | **Memory** | `chatrecall` (conversation search) | Correlation ID propagation, session SQLite store | `memory` (preference learning) |
 | **Scheduling** | `platform__manage_schedule` (cron) | Recipe definitions (daily PR review, ticket polling, security scans) | — |
-| **Chat ingress** | — | Slack Bolt + Microsoft 365 Agent SDK adapters | — |
+| **Chat ingress** | — | Slack Bolt + Microsoft 365 Agent SDK adapters; webhook ingress (GitHub/ADO events) | — |
+| **Queue ingress (Stream)** | — | `queue-ingress`: single Service Bus work queue, consumer-side idempotency, reason-coded DLQ, KEDA scale target (ADR-027) | — |
+| **Effect gateway** | — | In-process `effect_gateway` in the toolshed: draft/commit/discard with evidence gate + approval classes (ADR-028) | — |
+| **Cost control** | — | `budget/v1` enforcement: per-item cap halts the item (`BUDGET_EXCEEDED`), daily cap pauses the queue (ADR-031) | — |
 | **Observability** | — | MCP proxy logging, Table Storage, Log Analytics, Grafana, custom dashboard | `autovisualiser` |
 | **Security** | — | Tool allowlisting, rate limiting, human-in-the-loop, content safety (AI Foundry), managed identity, private endpoints | — |
 | **Config & prompts** | Extension manifests (YAML) | Git-versioned prompts, governance configs, CI/CD deployment | Resources system, `load_skill` |
@@ -248,13 +251,17 @@ in the contracts repository.
 │              MINIONS AGENT FRAMEWORK                     │
 │                                                          │
 │  🏗️  orchestrator (intent, DAG, lifecycle, gating)       │
-│  🏗️  mcp-toolshed (allowlists, rate limiting, logging)   │
+│  🏗️  mcp-toolshed (allowlists, rate limiting, logging,   │
+│      effect gateway + sampling QA — ADR-028/032)         │
 │  🏗️  slack-bot (Slack ingress/egress)                    │
 │  🏗️  teams-bot (Teams ingress/egress)                    │
+│  🏗️  webhook-ingress (GitHub/ADO event ingress)          │
+│  🏗️  queue-ingress (Service Bus work items, ADR-027)     │
 │  🏗️  agent-dashboard (session replay, correlation tree)  │
-│  🏗️  Minion prompts (5 specialized system prompts)       │
+│  🏗️  Minion prompts (7 specialized system prompts)       │
 │  🏗️  SQLite session store + schema                       │
-│  🏗️  Azure Table + Blob + Service Bus + Grafana          │
+│  🏗️  Azure Table (ToolCallLog + shared GovernanceState,  │
+│      ADR-026) + Blob + Service Bus + Grafana             │
 │  🏗️  Correlation ID propagation                          │
 │  🏗️  Governance config + CI/CD                           │
 └─────────────────────────────────────────────────────────┘

@@ -35,7 +35,7 @@ variable "orchestrator" {
 }
 
 variable "queue_ingress" {
-  description = "Configuration for the queue-ingress container app (Milestone 15)."
+  description = "Configuration for the queue-ingress container app (Milestone 15 of the forge-ops execplan, forge-contracts repo)."
   type = object({
     name             = string
     identity_id      = string
@@ -71,7 +71,9 @@ variable "dashboard" {
     identity_id = string
     image       = string
     port        = optional(number, 3001)
-    # Milestone 14 (review finding M7): Entra ID app registration for the
+    # Milestone 14 of the 2026-07 Minions remediation plan (review finding
+    # M7; see the README roadmap table — not the forge-ops execplan's
+    # milestone numbering): Entra ID app registration for the
     # Container Apps "easy auth" front door. Both null by default so the
     # dashboard deploys without platform auth (local-dev/CI plans) until an
     # operator supplies a real app registration; the app's own

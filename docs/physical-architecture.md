@@ -40,17 +40,20 @@
 
 | Resource | SKU | vCPU | Memory | Replicas (min–max) |
 |---|---|---|---|---|
-| **Orchestrator** | Consumption-only | 1.0 | 2 GB | 1–5 |
-| **Slack Bot** | Consumption-only | 0.5 | 1 GB | 1 (always warm) |
-| **Teams Bot** | Consumption-only | 0.5 | 1 GB | 1 (always warm) |
+| **Orchestrator** (`ca-orchestrator`) | Consumption-only | 1.0 | 2 GB | 1–5 |
+| **Queue-Ingress** (`ca-queue-ingress`) | Consumption-only | 1.0 | 2 GB | 1–5 (KEDA on work-queue depth, ADR-027) |
+| **Toolshed** (`ca-toolshed`) | Consumption-only | 0.5 | 1 GB | 1–5 (shared governance state, ADR-026) |
+| **Dashboard** (`ca-dashboard`) | Consumption-only | 0.5 | 1 GB | 1 (pinned, ADR-026) |
+| **Slack Bot** (`ca-slackbot`) | Consumption-only | 0.5 | 1 GB | 1 (always warm, pinned) |
+| **Teams Bot** (`ca-teamsbot`) | Consumption-only | 0.5 | 1 GB | 1 (always warm, pinned) |
 | **MCP Sidecars** (filesystem, git, shell) | Consumption-only | 0.25 | 0.5 GB | 1 per orchestrator replica |
 
 **Scaling triggers:**
 
 | Component | Scaler | Metric | Threshold |
 |---|---|---|---|
-| Orchestrator | KEDA Service Bus | Queue depth > 3 messages | +1 replica |
-| Orchestrator | KEDA Service Bus | Queue depth = 0 for 15 min | Scale to 1 (or 0 outside business hours) |
+| Queue-ingress | KEDA Service Bus (queue mode) | Work-queue (`minion-tasks`) depth | +1 replica per depth threshold (`messageCount` metadata), 1–5 replicas (ADR-027: the scale target moved here from the orchestrator) |
+| Orchestrator | None — plain `min_replicas = 1` / `max_replicas = 5` | N/A | No KEDA rule since the queue consumer moved to queue-ingress |
 | Bots | N/A — pinned single replica | N/A | `max_replicas = 1` always; no scaler configured (ADR-026) |
 | MCP Sidecars | Colocated | Same as orchestrator | Inherits orchestrator scaling |
 
@@ -61,8 +64,8 @@
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryTextColor': '#1a1a1a'}}}%%
 flowchart LR
-    subgraph "Scaling Triggers (orchestrator only)"
-        q_depth["Service Bus\nQueue Depth > 3"]
+    subgraph "Scaling Triggers (queue-ingress only, ADR-027)"
+        q_depth["Service Bus\nWork-Queue Depth"]
         q_empty["Queue Depth = 0\nfor 15 min"]
         off_hours["Outside\nBusiness Hours"]
     end
@@ -72,7 +75,8 @@ flowchart LR
     end
     
     subgraph "Container Apps"
-        orch["Orchestrator\n1 ⇄ 5 replicas"]
+        qi["Queue-Ingress\n1 ⇄ 5 replicas (KEDA)"]
+        orch["Orchestrator\n1 ⇄ 5 replicas (no scaler)"]
         toolshed["Toolshed\n1 ⇄ 5 replicas (ADR-026)"]
         bots["Bots, dashboard\nmax_replicas = 1, no scaler (ADR-026)"]
     end
@@ -80,7 +84,7 @@ flowchart LR
     q_depth -->|"scale out"| keda
     q_empty -->|"scale in"| keda
     off_hours -->|"scale to zero"| keda
-    keda --> orch
+    keda --> qi
     
     style q_depth fill:#fadbd8,stroke:#e6a8a0,color:#1a1a1a
     style q_empty fill:#d6eaf8,stroke:#7fb3d8,color:#1a1a1a
@@ -275,20 +279,15 @@ All well within free/cheapest tier limits.
 | Resource | SKU | Throughput |
 |---|---|---|
 | Namespace | Standard | Up to 1,000 msg/sec |
-| Topic: `minion-tasks` | — | Shared namespace throughput |
-| Subscription: `code-explorer` | — | Max delivery count: 3 |
-| Subscription: `code-reviewer` | — | Max delivery count: 3 |
-| Subscription: `pr-crafter` | — | Max delivery count: 3 |
-| Subscription: `ticket-analyst` | — | Max delivery count: 3 |
-| Subscription: `security-auditor` | — | Max delivery count: 3 |
+| Queue: `minion-tasks` | — | Single work-item queue (ADR-027; not a topic + per-minion-type subscriptions), max delivery count: 3 |
+
+> **Correction (2026-08-28, ADR-027):** an earlier revision described a `minion-tasks` **topic** with one subscription per minion type. The as-built topology (`infra/terraform/modules/service_bus/main.tf`, forge-ops Milestone 15) is a single Service Bus **queue** consumed by the queue-ingress; `item_type` is a field of the `WorkItem` envelope, not a broker routing property.
 
 **Message size:** ~2–10 KB typical (instructions + context object). Blob reference for large context payloads (>200 KB).
 
-**Session model:** Session ID = correlation ID. FIFO per session. Prevents a session's Phase 2 minion from running before Phase 1 completes.
+**Dead-letter:** Max delivery count = 3 → DLQ, with reason codes (`MALFORMED_ENVELOPE` / `POISON_MESSAGE` / `BUDGET_EXCEEDED`) set by the queue-ingress. Operator triage per `docs/runbooks/stream-operations.md`.
 
-**Dead-letter:** Max delivery count = 3 → DLQ. Operator inspects via dashboard, replays or discards.
-
-**Duplicate detection:** Enabled per topic. Prevents double-dispatch if the orchestrator retries a `send`.
+**Idempotency:** Consumer-side, not Service Bus duplicate detection (ADR-027): the queue-ingress records completed outcomes against each item's `idempotency_key` in an idempotency store, so a redelivery or producer duplicate short-circuits to the recorded outcome instead of re-running.
 
 ---
 
@@ -428,7 +427,8 @@ graph TB
 
 | Component | SPOF? | Mitigation |
 |---|---|---|
-| Orchestrator | No (multi-replica) | KEDA scales to ≥2 during active sessions |
+| Orchestrator | No (multi-replica) | `min_replicas = 1` / `max_replicas = 5`; the KEDA queue-depth scaler now lives on the queue-ingress (ADR-027) |
+| Queue-Ingress | No (multi-replica) | KEDA scales 1–5 on work-queue depth |
 | Service Bus | No (Microsoft-managed, 99.9% SLA Standard) | Acceptable |
 | Table Storage | No (Microsoft-managed, 99.9% SLA) | Acceptable |
 | AI Foundry | Yes (single deployment) | Deploy to 2+ zones; fallback deployment in same region |
@@ -450,18 +450,19 @@ graph TB
 
 ### Horizontal Scaling
 
-> **Correction (2026-07-09, Milestone 18 hygiene sweep; updated 2026-08-28 for ADR-026):** the diagram below previously showed a symmetric KEDA HTTP scaler for the bots (mirroring the orchestrator's Service Bus scaler, "Requests > 10/min → +1 replica"). That capability does not exist in Terraform and was never built — see `adrs/adr-025-single-replica-governance-state.md`. The orchestrator and, since Milestone 18 (ADR-026), the toolshed scale horizontally today; the Slack/Teams bots and the dashboard remain pinned to `max_replicas = 1` in `infra/terraform/modules/container_apps/main.tf` because their governance-adjacent state (session bookkeeping, the mounted SQLite file) is still process-local. The toolshed's rate-limiter buckets and circuit breakers moved to a shared `GovernanceState` Azure Table (ADR-026), so those are no longer a single-replica constraint for it.
+> **Correction (2026-07-09, Milestone 18 hygiene sweep; updated 2026-08-28 for ADR-026):** the diagram below previously showed a symmetric KEDA HTTP scaler for the bots (mirroring the orchestrator's Service Bus scaler, "Requests > 10/min → +1 replica"). That capability does not exist in Terraform and was never built — see `adrs/adr-025-single-replica-governance-state.md`. The queue-ingress (KEDA on work-queue depth, ADR-027), the orchestrator (plain 1–5 replica bounds, no scaler), and, since Milestone 18 (ADR-026), the toolshed scale horizontally today; the Slack/Teams bots and the dashboard remain pinned to `max_replicas = 1` in `infra/terraform/modules/container_apps/main.tf` because their governance-adjacent state (session bookkeeping, the mounted SQLite file) is still process-local. The toolshed's rate-limiter buckets and circuit breakers moved to a shared `GovernanceState` Azure Table (ADR-026), so those are no longer a single-replica constraint for it.
 
 ```
                      KEDA Scaler
                          │
                          ▼
-              Service Bus Queue
-              (orchestrator ONLY)
+              Service Bus work queue
+              (queue-ingress ONLY, ADR-027)
                          │
                          ▼
-              Queue depth > 3
-              → +1 replica
+              Queue depth over threshold
+              → +1 queue-ingress replica
+              (1 ⇄ 5)
                          │
                          ▼
               Queue depth = 0
@@ -469,6 +470,8 @@ graph TB
               scale to 1
               (or 0 off-hours)
 
+    Orchestrator: no scaler,
+    min 1 / max 5 replicas.
     Bots, dashboard: no scaler.
     max_replicas = 1 always (ADR-026).
     Toolshed: no scaler, 1 ⇄ 5 replicas —
@@ -579,7 +582,7 @@ graph TB
     subgraph "modules/"
         net["networking\nVNet, subnets, NSGs"]
         ca["container_apps\nEnvironment, apps, revisions"]
-        sb["service_bus\nNamespace, topic, subscriptions"]
+        sb["service_bus\nNamespace, work queue (ADR-027)"]
         st["storage\nAccount, tables, containers"]
         kv["keyvault\nVault, RBAC"]
         ai["ai_foundry\nHub, project, deployments"]

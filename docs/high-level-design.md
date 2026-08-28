@@ -172,6 +172,18 @@ The Minions Agent Framework extends the core Goose platform into a **multi-agent
   - `*/30 * * * *` — Poll ServiceNow for new critical incidents
   - `0 7 * * 1` — Weekly codebase health report (security scan + dependency audit)
 
+### Webhook Ingress (as built)
+
+- **Type:** standalone service (`extensions/webhook-ingress`)
+- **Mechanism:** `POST /webhooks/github` (HMAC-verified) and `POST /webhooks/ado` (basic-auth-verified) map events onto the same `IngressRequest`/`IngressRunner` contract chat uses and drive the orchestrator runner; replies post back through the governed toolshed
+- **Status:** container image built by CI; not yet deployed by Terraform (known gap — see `extensions/webhook-ingress/README.md`)
+
+### Work-Item Queue Ingress (as built)
+
+- **Type:** standalone service (`extensions/queue-ingress`), the Forge Ops Stream entry point (ADR-027)
+- **Mechanism:** consumes typed `WorkItem` envelopes (`item_type`, `payload`, `idempotency_key`, `correlation_id`) from the single Service Bus queue `minion-tasks` and drives the same orchestrator runner; consumer-side idempotency, reason-coded dead-lettering (`MALFORMED_ENVELOPE`/`POISON_MESSAGE`/`BUDGET_EXCEEDED`), daily-budget pause (ADR-031)
+- **Scaling:** the KEDA queue-depth scale target (1–5 replicas)
+
 ---
 
 ## Layer 2: Orchestrator
@@ -730,11 +742,11 @@ The framework runs on **Azure AI Foundry** for AI inference and **Azure Containe
 │  │         └─────────────────┼─────────────────┘                    │  │
 │  │                           │                                      │  │
 │  │  ┌────────────────────────┴────────────────────────┐           │  │
-│  │  │  Azure Service Bus                               │           │  │
-│  │  │  • Topic: minion-tasks (async task queue)        │           │  │
-│  │  │  • Subscription per minion type                  │           │  │
-│  │  │  • Sessions enabled (ordered delivery per corr.) │           │  │
-│  │  │  • Dead-letter on failure                        │           │  │
+│  │  │  Azure Service Bus (ADR-027)                     │           │  │
+│  │  │  • Single queue: minion-tasks (work items)       │           │  │
+│  │  │  • Consumed by queue-ingress (KEDA target)       │           │  │
+│  │  │  • Consumer-side idempotency store               │           │  │
+│  │  │  • Dead-letter with reason codes                 │           │  │
 │  │  └─────────────────────────────────────────────────┘           │  │
 │  │                                                                  │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │  │
@@ -781,7 +793,7 @@ The framework runs on **Azure AI Foundry** for AI inference and **Azure Containe
 
 | Trigger | Scaling Action |
 |---|---|
-| Service Bus queue depth > N messages | KEDA scales container count up (max 10) |
+| Service Bus queue depth > N messages | KEDA scales the **queue-ingress** container count up (max 5, per `infra/terraform`; ADR-027) |
 | Queue depth = 0 for T minutes | Scale to zero (or floor of 1 for latency-sensitive) |
 | Minion timeout spike | Prometheus alert → ops investigate |
 | Rate limit near exhaustion (GitHub/ADO) | Backpressure: orchestrator throttles dispatch |

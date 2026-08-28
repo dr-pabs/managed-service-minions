@@ -14,11 +14,13 @@
 4. [Prompt Quality Tests](#prompt-quality-tests)
 5. [End-to-End Pipeline Tests](#end-to-end-pipeline-tests)
 6. [Allowlist & Security Tests](#allowlist--security-tests)
-7. [Performance Tests](#performance-tests)
-8. [Chaos Tests](#chaos-tests)
-9. [Cross-Platform Parity Tests](#cross-platform-parity-tests)
-10. [Test Infrastructure](#test-infrastructure)
-11. [CI Integration](#ci-integration)
+7. [Soak Tests](#soak-tests)
+8. [Contract Conformance Tests](#contract-conformance-tests)
+9. [Performance Tests](#performance-tests)
+10. [Chaos Tests](#chaos-tests)
+11. [Cross-Platform Parity Tests](#cross-platform-parity-tests)
+12. [Test Infrastructure](#test-infrastructure)
+13. [CI Integration](#ci-integration)
 
 ---
 
@@ -59,6 +61,7 @@ The framework requires **95% branch and line coverage, 100% function and stateme
 - Any code that cannot be covered by automated tests must be annotated with a written justification in the PR and approved by a maintainer.
 - Exemptions are only granted for generated code, third-party vendored code, or platform-specific shims, and must be explicitly excluded in the package's `jest.config.js` with a documented rationale.
 - New code cannot be merged unless it maintains or improves the package's configured coverage threshold.
+- **Filtered runs are exempt by design (ADR-023, 2026-08-28 amendment)** — this is not a violation of the "no lowering thresholds" rule below. When a jest invocation carries a positional test-path pattern (e.g. `pnpm --filter ./packages/framework-core test -- identity-contract`), some packages' configs (`framework-core`, `mcp-toolshed`, `queue-ingress`, `test/`) skip the `coverageThreshold` block, because a global threshold mathematically cannot hold over a subset of `src/`. Full, unfiltered runs — which is what CI executes — always keep the 95/100 thresholds; the carve-out is detection-based and cannot be enabled for a full run.
 
 ---
 
@@ -339,6 +342,13 @@ Run nightly (or on demand) against a staging environment with real MCP servers p
 | 9 | Human approval: timeout | PR remains open, escalation message posted |
 | 10 | Multi-team isolation | Team A session cannot see Team B data |
 
+Two cross-package Stream e2e tests are implemented in the `test/` workspace and run with the repo suite:
+
+| Test | What it proves |
+|---|---|
+| `test/src/e2e-item-pipeline.test.ts` | A declarative recipe (`recipes/item-pipelines.yaml`) drives the item-pipeline engine through classify→act→verify→commit against a real in-process toolshed + effect gateway (ADR-030) |
+| `test/src/bridge-e2e.test.ts` | The escalation bridge round trip against a live Forge (Flow) intake — requires `FORGE_INTAKE_URL` + `FORGE_BRIDGE_SECRET`; skips without them (ADR-033) |
+
 ### E2E Test Environment
 
 ```
@@ -374,6 +384,30 @@ These **must pass 100%** before any deployment.
 
 ---
 
+## Soak Tests
+
+The queue-ingress ships a thousand-item soak (`extensions/queue-ingress/soak/soak.test.ts`, forge-ops Milestone 21), run via:
+
+```bash
+pnpm --filter ./extensions/queue-ingress test:soak
+```
+
+It drives the real in-memory queue + `WorkItemProcessor` + idempotency store + consume loop over 1,000 enqueued messages (850 unique, 100 seeded duplicates, 40 poison, 10 malformed envelopes) and asserts **zero double-commits** and **complete dead-letter accounting** (exactly the poison + malformed items, split by reason code). It is excluded from the default jest discovery and carries no coverage threshold — it is a correctness/scale gate, not a coverage target.
+
+---
+
+## Contract Conformance Tests
+
+The `identity/v1` token implementation is proven byte-for-byte against the cross-language vectors in the forge-contracts repository (ADR-029):
+
+```bash
+FORGE_CONTRACTS_DIR=/path/to/forge-contracts pnpm --filter framework-core test
+```
+
+`packages/framework-core/src/__tests__/identity-contract.test.ts` replays every accept vector (mint must reproduce the exact token bytes) and every reject vector (verify must refuse with the labeled reason) from `<FORGE_CONTRACTS_DIR>/vectors/identity/v1/vectors.json`. Without a forge-contracts checkout the suite skips with a loud multi-line banner — never silently — so a run that printed no banner really did prove conformance.
+
+---
+
 ## Performance Tests
 
 A k6 skeleton is provided at `test/performance/load-test.js`. It exercises the dashboard `/health` endpoint and can be extended to cover orchestrator pipelines.
@@ -384,7 +418,7 @@ A k6 skeleton is provided at `test/performance/load-test.js`. It exercises the d
 | Simple query end-to-end | p95 < 5 seconds | Slack message → response posted |
 | Complex pipeline end-to-end | p95 < 3 minutes | "Fix INC00421" → PR created + reviewed |
 | Tool call logging overhead | < 2ms per call | Added latency from pre/post-log writes |
-| 100 concurrent sessions | No queue depth > 50 | Service Bus Active Messages metric |
+| 100 concurrent sessions | Work-queue (`minion-tasks`) depth stays bounded and drains after the burst (KEDA scales the queue-ingress 1–5 on depth, ADR-027 — sustained depth growth means the consumer, not the broker, is the bottleneck) | Service Bus Active Messages metric |
 | 6 parallel PR reviews | All complete within 5 minutes | Max wall clock of parallel Code Reviewer runs |
 | Cold start (scale from zero) | < 20 seconds | Time to first byte after scale-to-zero |
 
