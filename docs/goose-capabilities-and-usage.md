@@ -173,6 +173,34 @@ These capabilities do not exist in Goose and must be built entirely by the frame
 
 ---
 
+## Forge Ops (Stream) Capabilities
+
+Beyond the Goose-boundary gaps above, Minions carries a **Forge Ops (Stream)**
+distribution — the high-volume customer-workflow half of a two-runtime design
+(**Flow** lives in the Forge repository), joined by versioned contracts in the
+[`forge-contracts`](https://github.com/dr-pabs/forge-contracts) repository.
+Each capability below ships with a backing test suite; the table is the Stream
+counterpart to Forge's `capabilities.yaml` (which names each Flow capability's
+backing test the same way).
+
+| Capability | What it does | Backing tests |
+|---|---|---|
+| **Identity tokens** (`identity/v1`) | Agent identity tokens minted/verified with the contract claim set; no self-reported identity | `packages/framework-core/src/__tests__/identity-contract.test.ts`, `minion-token.test.ts` |
+| **Effect gateway** (`effects/v1`) | Agents draft side effects; only the gateway commits them, gated on verification evidence + approval class; irreversible effects refuse agent actors | `extensions/mcp-toolshed/src/__tests__/effect-gateway.test.ts` |
+| **Work-item queue ingress** | Typed `WorkItem` envelopes consumed from Service Bus with idempotent redelivery and reason-coded dead-lettering | `extensions/queue-ingress/__tests__/*.test.ts` |
+| **Item pipelines** | Declarative classify→act→verify→commit/escalate chains with per-item verification | `extensions/queue-ingress/__tests__/item-pipeline.test.ts`, `test/src/e2e-item-pipeline.test.ts` |
+| **Cost control** (`budget/v1`) | Hard per-item `max_cost_usd` (item halts, never the queue) and a per-UTC-day budget that pauses consumption | `extensions/queue-ingress/__tests__/cost-control.test.ts` |
+| **Multi-replica governance state** | Rate-limit and breaker state shared across replicas (ADR-026 supersedes ADR-025) | `extensions/mcp-toolshed/src/__tests__/shared-governance-state.test.ts` |
+| **Sampling QA loop** | Post-hoc human review of auto-commits turns a disagreement rate into an auto-commit circuit breaker per effect type | `extensions/mcp-toolshed/src/__tests__/sampling-qa.test.ts` |
+| **Escalation bridge** (`escalation/v1`) | A failing item escalates into a signed envelope, runs in Flow, and closes on a signed resolution under one correlation id | `extensions/queue-ingress/__tests__/escalation.test.ts`, `test/src/bridge-e2e.test.ts` |
+| **1000-item soak** | At-most-once commits and complete dead-letter accounting over a seeded duplicate/poison run | `extensions/queue-ingress/soak/soak.test.ts` (`pnpm --filter ./extensions/queue-ingress test:soak`) |
+
+The full design and milestone history live in
+[`forge-ops.execplan.md`](https://github.com/dr-pabs/forge-contracts/blob/main/forge-ops.execplan.md)
+in the contracts repository.
+
+---
+
 ## Summary Matrix
 
 | Category | What Goose Provides | What We Add | What We Don't Use |
