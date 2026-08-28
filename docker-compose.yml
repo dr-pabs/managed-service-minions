@@ -58,3 +58,16 @@ services:
       - "3005:3000"
     container_name: mock-shell
     profiles: ['dev']
+
+  # Milestone 18 (ADR-026): local emulation of the shared `GovernanceState`
+  # Azure Table. The toolshed uses it when TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING
+  # points at this emulator (default devstore account, table endpoint on 10002):
+  #   DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;
+  #   AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;
+  #   TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - "10002:10002"
+    container_name: azurite
+    profiles: ['dev']

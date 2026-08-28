@@ -57,13 +57,16 @@ export interface ToolshedState {
   circuitBreakerConfig: CircuitBreakerConfig;
   /**
    * Shared-state seam for rate-limit/breaker/approval operations (H5/F6,
-   * ADR-025). Today this is always an in-process adapter
+   * ADR-025, ADR-026). By default this is the in-process adapter
    * (`createInProcessGovernanceStateStore`) over the same `rateLimiter`,
-   * `breakers`, and `store` fields above — `executeTool`/`gateDestructiveCall`
-   * read and write governance state exclusively through this field rather
-   * than reaching into those collaborators directly, so a future distributed
-   * implementation only needs to satisfy this interface. See
-   * `governance-state.ts` and the ExecPlan Decision Log (Milestone 7).
+   * `breakers`, and `store` fields above; `server.ts` may instead install a
+   * shared Azure Table Storage-backed implementation
+   * (`createSharedGovernanceStateStore`, Milestone 18) when a connection
+   * string is configured, so multiple replicas share one view of rate-limit
+   * and breaker state. `executeTool`/`gateDestructiveCall` read and write
+   * governance state exclusively through this field rather than reaching into
+   * those collaborators directly. See `governance-state.ts` and
+   * `shared-governance-state.ts`.
    */
   governanceState: GovernanceStateStore;
   /**
@@ -495,7 +498,7 @@ async function doExecuteToolPipeline(
   const serverRateKey = `server:${serverAlias}`;
   const serverRateLimit = toolshedState.governance.rateLimits[serverAlias] ?? toolshedState.governance.rateLimits.default;
   if (serverRateLimit) {
-    const serverThrottle = toolshedState.governanceState.takeRateLimitToken(serverRateKey, serverRateLimit);
+    const serverThrottle = await toolshedState.governanceState.takeRateLimitToken(serverRateKey, serverRateLimit);
     if (!serverThrottle.allowed) {
       return emit({
         status: 'throttled',
@@ -509,7 +512,7 @@ async function doExecuteToolPipeline(
   // `default` limit. Kept in addition to the per-server bucket above, per
   // the pinned enforcement order — both are checked at the rate-limit step.
   const rateKey = `${ctx.teamId}:${ctx.minionType}:${serverAlias}:${toolName}`;
-  const rateLimit = toolshedState.governanceState.takeDefaultRateLimitToken(rateKey);
+  const rateLimit = await toolshedState.governanceState.takeDefaultRateLimitToken(rateKey);
   if (!rateLimit.allowed) {
     return emit({
       status: 'throttled',
@@ -525,7 +528,7 @@ async function doExecuteToolPipeline(
   // separately-tracked, still-closed breakers. See README.md for the same
   // statement kept in sync.
   const breakerKey = serverAlias;
-  if (!toolshedState.governanceState.canExecuteBreaker(breakerKey)) {
+  if (!(await toolshedState.governanceState.canExecuteBreaker(breakerKey))) {
     // Breaker-state gauge (Milestone 13, M9/F9): observe-only, recorded
     // alongside the pre-existing open-breaker decision, never influencing
     // it. Ordering (M13 review hardening finding): `emit()` — which writes
@@ -535,10 +538,11 @@ async function doExecuteToolPipeline(
     // `recordBreakerState` is itself failure-isolated — see
     // `telemetry-metrics.ts`'s `safeEmit`; this ordering is the second,
     // structural half of the same guarantee, independent of that helper).
+    const breakerRetryAfterSeconds = await toolshedState.governanceState.breakerRetryAfterSeconds(breakerKey);
     const result = emit({
       status: 'throttled',
       error: 'Circuit breaker is open',
-      retryAfterSeconds: toolshedState.governanceState.breakerRetryAfterSeconds(breakerKey),
+      retryAfterSeconds: breakerRetryAfterSeconds,
     });
     recordBreakerState(breakerKey, true);
     return result;
@@ -667,7 +671,7 @@ async function doExecuteTool(
   if (cacheKeyValue) {
     const cached = state.store.getCachedToolCall(cacheKeyValue);
     if (cached !== undefined) {
-      state.governanceState.recordBreakerSuccess(breakerKey);
+      await state.governanceState.recordBreakerSuccess(breakerKey);
       recordBreakerState(breakerKey, false);
       return { status: 'success', data: cached };
     }
@@ -694,7 +698,7 @@ async function doExecuteTool(
       { correlation_id: ctx.correlationId, minion_type: ctx.minionType, session_id: ctx.sessionId, server_alias: serverAlias, tool_name: toolName },
       () => adapter.callTool(toolName, params)
     );
-    state.governanceState.recordBreakerSuccess(breakerKey);
+    await state.governanceState.recordBreakerSuccess(breakerKey);
     recordBreakerState(breakerKey, false);
     if (cacheKeyValue) {
       const ttlMs = (policy.ttlSeconds ?? 0) * 1000;
@@ -702,7 +706,7 @@ async function doExecuteTool(
     }
     return { status: 'success', data };
   } catch (err) {
-    state.governanceState.recordBreakerFailure(breakerKey);
+    await state.governanceState.recordBreakerFailure(breakerKey);
     return { status: 'error', error: err instanceof Error ? err.message : String(err) };
   }
 }

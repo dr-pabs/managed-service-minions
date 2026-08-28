@@ -30,4 +30,5 @@ Amendments are appended to an ADR, never rewritten over it: the original Context
 | [ADR-022](./adr-022-multi-tenancy.md) | Multi-tenancy model | Proposed |
 | [ADR-023](./adr-023-100-percent-test-coverage-gate.md) | 100% Test Coverage Gate for Runnable Code | Accepted (amended 2026-07-09: 95% branches/lines) |
 | [ADR-024](./adr-024-red-build-policy-ralph-wiggum-loop.md) | Red Build Policy — The "Ralph Wiggum" Loop | Accepted |
-| [ADR-025](./adr-025-single-replica-governance-state.md) | Single-replica deployment for the toolshed and chat bots (governance state is process-local) | Accepted |
+| [ADR-025](./adr-025-single-replica-governance-state.md) | Single-replica deployment for the toolshed and chat bots (governance state is process-local) | Accepted (superseded by ADR-026) |
+| [ADR-026](./adr-026-shared-governance-state.md) | Shared governance state for the toolshed (rate limiter + circuit breaker on Azure Tables) | Accepted |

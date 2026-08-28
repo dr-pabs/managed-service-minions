@@ -242,9 +242,15 @@ module "container_apps" {
   }
 
   toolshed = {
-    name        = "ca-toolshed-${var.environment}"
-    identity_id = module.managed_identity.toolshed_id
-    image       = "${module.container_registry.login_server}/mcp-toolshed:latest"
+    name         = "ca-toolshed-${var.environment}"
+    identity_id  = module.managed_identity.toolshed_id
+    image        = "${module.container_registry.login_server}/mcp-toolshed:latest"
+    # Milestone 18 (ADR-026): the toolshed now scales past one replica — its
+    # rate-limit buckets and circuit breaker state live in the shared
+    # `GovernanceState` Azure Table, so multiple replicas enforce one view of
+    # them. Pending-approval CRUD remains single-writer on SQLite (see ADR-026).
+    min_replicas = 1
+    max_replicas = 5
   }
 
   log_analytics_workspace_id = module.observability.workspace_id
@@ -267,6 +273,11 @@ module "container_apps" {
     {
       SERVICE_BUS_CONNECTION_STRING = module.service_bus.primary_connection_string
       STORAGE_CONNECTION_STRING     = module.storage.primary_connection_string
+      # Milestone 18 (ADR-026): the toolshed reads this to persist rate-limit
+      # buckets and circuit breaker state to the shared `GovernanceState`
+      # table (default table name matches modules/storage/main.tf). Injected as
+      # a Container App secret/env var on every app; only the toolshed reads it.
+      TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = module.storage.primary_connection_string
       SLACK_BOT_TOKEN               = var.slack_bot_token
       SLACK_SIGNING_SECRET          = var.slack_signing_secret
       MICROSOFT_APP_ID              = var.microsoft_app_id

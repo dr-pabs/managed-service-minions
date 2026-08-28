@@ -84,9 +84,11 @@ variable "dashboard" {
 variable "toolshed" {
   description = "Configuration for the MCP toolshed container app."
   type = object({
-    name        = string
-    identity_id = string
-    image       = string
+    name         = string
+    identity_id  = string
+    image        = string
+    min_replicas = number
+    max_replicas = number
   })
 }
 

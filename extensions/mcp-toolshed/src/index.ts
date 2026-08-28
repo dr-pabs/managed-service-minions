@@ -64,6 +64,10 @@ export {
   type RetryingAuditLogger,
   type RetryingAuditLoggerOptions,
 } from './cloud-audit.js';
+export {
+  createSharedGovernanceStateStore,
+  type SharedGovernanceStateStoreOptions,
+} from './shared-governance-state.js';
 export { redactSecrets, redactValue } from './redact.js';
 export {
   FileSystemArtifactStore,

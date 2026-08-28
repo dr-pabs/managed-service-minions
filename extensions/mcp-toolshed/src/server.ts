@@ -13,7 +13,9 @@ import { validateConfigAtRoot } from './config-validation.js';
 import { createSqliteStore } from './store.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { createMcpAdapter, type McpServerAdapter, type McpAdapterConfig } from './adapter.js';
-import { CircuitBreaker } from './circuit-breaker.js';
+import { CircuitBreaker, type CircuitBreakerConfig } from './circuit-breaker.js';
+import { createSharedGovernanceStateStore } from './shared-governance-state.js';
+import { TableClient } from '@azure/data-tables';
 import { startOperatorHttpServer, type OperatorHttpServer } from './operator-http.js';
 import { watchRules, type WatchRulesHandle } from './hot-reload.js';
 
@@ -138,6 +140,32 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
   }
 
   const defaultRateLimit = governance.rateLimits.default ?? { requestsPerMinute: 60, burst: 20 };
+  // Same config `createDefaultToolshedState` uses internally when not
+  // overridden — declared here so the shared governance store below enforces
+  // the identical breaker thresholds/timeouts as the in-process fallback.
+  const circuitBreakerConfig: CircuitBreakerConfig = {
+    failureThreshold: 5,
+    successThreshold: 3,
+    timeoutSecs: 30,
+    halfOpenMaxRequests: 1,
+  };
+
+  // Milestone 18 (ADR-026): when a governance-state connection string is
+  // configured, persist the rate-limit buckets and circuit breaker state to
+  // Azure Table Storage (or Azurite in dev) so multiple toolshed replicas
+  // share one view of them. Approvals stay on the SQLite `store` — see
+  // `shared-governance-state.ts`. Without the env var, fall back to the
+  // in-process adapter so local/dev runs need no extra infrastructure.
+  const governanceStateConnectionString = process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING;
+  const governanceStateTable = process.env.TOOLSHED_GOVERNANCE_STATE_TABLE ?? 'GovernanceState';
+  const sharedGovernanceState = governanceStateConnectionString
+    ? createSharedGovernanceStateStore({
+        client: TableClient.fromConnectionString(governanceStateConnectionString, governanceStateTable),
+        store,
+        circuitBreakerConfig,
+        defaultRateLimit,
+      })
+    : undefined;
 
   return createDefaultToolshedState({
     allowlists,
@@ -146,6 +174,11 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
     adapters,
     breakers: new Map<string, CircuitBreaker>(),
     rateLimiter: createRateLimiter(defaultRateLimit),
+    circuitBreakerConfig,
+    // Only override `governanceState` when a shared store is configured;
+    // otherwise let `createDefaultToolshedState` build the in-process adapter
+    // over the `breakers`/`rateLimiter`/`store` above.
+    ...(sharedGovernanceState ? { governanceState: sharedGovernanceState } : {}),
     auditLogger: (entry) => {
       console.log(JSON.stringify({ type: 'audit', ...entry }));
     },

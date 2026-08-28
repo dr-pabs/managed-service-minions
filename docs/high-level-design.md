@@ -513,10 +513,10 @@ Plus Azure Monitor / Log Analytics for search, dashboards, and alerting:
 |---|---|
 | **Purpose** | Hot session state — active conversations, in-flight minions, pending approvals |
 | **Location** | Local to the toolshed container, on a mounted Azure Files share (`extensions/mcp-toolshed/src/store.ts`); the orchestrator's own conversation/session bookkeeping is a separate concern from the toolshed's governance state |
-| **Schema** | Sessions, minion_runs, pending_approvals; rate limiter and circuit breaker state are in-process (`Map`-backed, not persisted to SQLite — see `rate-limiter.ts`/`circuit-breaker.ts`) |
+| **Schema** | Sessions, minion_runs, pending_approvals. Rate-limiter and circuit-breaker state are no longer in process memory — they live in a shared `GovernanceState` Azure Table (ADR-026, `shared-governance-state.ts`); only pending approvals remain on SQLite. |
 | **Backup** | Periodic WAL snapshots to Azure Blob (cool tier) |
 | **Cost** | $0 (embedded, no Azure resource) |
-| **Limitation** | **Not shared across replicas, and the toolshed/bots/dashboard are pinned to a single replica because of it (ADR-025)** — pending approvals, the rate limiter's token buckets, and circuit breaker state are process-local with no cross-replica coordination, so unlike the orchestrator (which scales via Service Bus session affinity, ADR-004/ADR-012) there is no session-affinity trick that makes multiple toolshed replicas safe. See ADR-025 for the trigger condition and the deferred Redis/Table-Storage-lease alternatives. |
+| **Limitation** | **Pending approvals are not shared across replicas — they remain single-writer on SQLite (ADR-026).** The rate limiter's token buckets and circuit breaker state moved to a shared `GovernanceState` Azure Table (ADR-026), so the toolshed itself scales; only the chat bots and dashboard stay pinned to a single replica because they share this SQLite file and hold no rate-limiter/breaker state of their own. Unlike the orchestrator (which scales via Service Bus session affinity, ADR-004/ADR-012) there is no session-affinity trick for the approval path — it is the one residual single-writer concern, and the trigger condition to revisit is in ADR-026. |
 
 ### Azure Table Storage — Tool Call Log
 

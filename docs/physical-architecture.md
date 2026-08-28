@@ -51,10 +51,10 @@
 |---|---|---|---|
 | Orchestrator | KEDA Service Bus | Queue depth > 3 messages | +1 replica |
 | Orchestrator | KEDA Service Bus | Queue depth = 0 for 15 min | Scale to 1 (or 0 outside business hours) |
-| Bots | N/A — pinned single replica | N/A | `max_replicas = 1` always; no scaler configured (ADR-025) |
+| Bots | N/A — pinned single replica | N/A | `max_replicas = 1` always; no scaler configured (ADR-026) |
 | MCP Sidecars | Colocated | Same as orchestrator | Inherits orchestrator scaling |
 
-> **Correction (2026-07-09, Milestone 18 hygiene sweep):** this table previously read "Bots | KEDA HTTP | Requests > 10/min | +1 replica (rarely needed)," implying the Slack/Teams bots autoscale on HTTP request volume. That never matched `infra/terraform/modules/container_apps/main.tf`, which pins both bots to `min_replicas = 1` / `max_replicas = 1` with no KEDA HTTP scale rule defined for them — and per `adrs/adr-025-single-replica-governance-state.md`, this is intentional, not an oversight: the bots share the toolshed's process-local governance-adjacent state assumptions (session/thread bookkeeping, the same mounted SQLite file) and are not part of the orchestrator's tested KEDA/Service-Bus scaling story. See ADR-025 for the trigger condition that would justify revisiting this.
+> **Correction (2026-07-09, Milestone 18 hygiene sweep; updated 2026-08-28 for ADR-026):** this table previously read "Bots | KEDA HTTP | Requests > 10/min | +1 replica (rarely needed)," implying the Slack/Teams bots autoscale on HTTP request volume. That never matched `infra/terraform/modules/container_apps/main.tf`, which pins both bots to `min_replicas = 1` / `max_replicas = 1` with no KEDA HTTP scale rule defined for them — and per `adrs/adr-026-shared-governance-state.md`, this is intentional, not an oversight: the bots share the toolshed's mounted SQLite file and the still single-writer pending-approval path (session/thread bookkeeping) and are not part of the orchestrator's tested KEDA/Service-Bus scaling story. The toolshed itself now scales (its rate limiter and circuit breaker moved to a shared `GovernanceState` Azure Table, ADR-026); the bots remain pinned because they hold no such state of their own and inherit the SQLite single-writer concern. See ADR-026 for the trigger condition that would justify revisiting the bots' pinning.
 
 **Why consumption-only (not Dedicated):**
 
@@ -73,7 +73,8 @@ flowchart LR
     
     subgraph "Container Apps"
         orch["Orchestrator\n1 ⇄ 5 replicas"]
-        bots["Bots, toolshed, dashboard\nmax_replicas = 1, no scaler (ADR-025)"]
+        toolshed["Toolshed\n1 ⇄ 5 replicas (ADR-026)"]
+        bots["Bots, dashboard\nmax_replicas = 1, no scaler (ADR-026)"]
     end
     
     q_depth -->|"scale out"| keda
@@ -449,7 +450,7 @@ graph TB
 
 ### Horizontal Scaling
 
-> **Correction (2026-07-09, Milestone 18 hygiene sweep):** the diagram below previously showed a symmetric KEDA HTTP scaler for the bots (mirroring the orchestrator's Service Bus scaler, "Requests > 10/min → +1 replica"). That capability does not exist in Terraform and was never built — see `adrs/adr-025-single-replica-governance-state.md`. Only the orchestrator scales horizontally today; the Slack/Teams bots, the toolshed, and the dashboard are all pinned to `max_replicas = 1` in `infra/terraform/modules/container_apps/main.tf` because their governance-adjacent state (rate limiter buckets, circuit breakers, session bookkeeping, the mounted SQLite file) is process-local with no cross-replica coordination.
+> **Correction (2026-07-09, Milestone 18 hygiene sweep; updated 2026-08-28 for ADR-026):** the diagram below previously showed a symmetric KEDA HTTP scaler for the bots (mirroring the orchestrator's Service Bus scaler, "Requests > 10/min → +1 replica"). That capability does not exist in Terraform and was never built — see `adrs/adr-025-single-replica-governance-state.md`. The orchestrator and, since Milestone 18 (ADR-026), the toolshed scale horizontally today; the Slack/Teams bots and the dashboard remain pinned to `max_replicas = 1` in `infra/terraform/modules/container_apps/main.tf` because their governance-adjacent state (session bookkeeping, the mounted SQLite file) is still process-local. The toolshed's rate-limiter buckets and circuit breakers moved to a shared `GovernanceState` Azure Table (ADR-026), so those are no longer a single-replica constraint for it.
 
 ```
                      KEDA Scaler
@@ -468,8 +469,10 @@ graph TB
               scale to 1
               (or 0 off-hours)
 
-    Bots, toolshed, dashboard: no scaler.
-    max_replicas = 1 always (ADR-025).
+    Bots, dashboard: no scaler.
+    max_replicas = 1 always (ADR-026).
+    Toolshed: no scaler, 1 ⇄ 5 replicas —
+    shared governance state (ADR-026).
 ```
 
 ### Vertical Scaling

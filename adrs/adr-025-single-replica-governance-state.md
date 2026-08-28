@@ -6,7 +6,7 @@
 | **Date** | 2026-07-09 |
 | **Deciders** | Minions remediation project (platform-engineer, Milestone 7) |
 | **Replaces** | — |
-| **Superseded by** | — |
+| **Superseded by** | ADR-026 |
 
 ---
 
