@@ -14,6 +14,7 @@ import {
   type EffectDraftRecord,
   type EffectDraftStore,
 } from './effect-store.js';
+import type { ReviewDecision, SamplingQa } from './sampling-qa.js';
 
 /**
  * Stream effect gateway (ExecPlan Milestone 14) — the TypeScript mirror of
@@ -42,6 +43,12 @@ export const SERVER_ALIAS = 'effect_gateway';
 export const DRAFT_EFFECT = 'draft_effect';
 export const COMMIT_EFFECT = 'commit_effect';
 export const DISCARD_EFFECT = 'discard_effect';
+/**
+ * The tool name a post-hoc review approval carries (Milestone 19). Distinct from
+ * `commit_effect` because this approval does NOT gate the commit — the commit
+ * already happened; a human `approve`/`deny` records `agreed`/`disagreed`.
+ */
+export const REVIEW_COMMIT = 'review_commit';
 export const GATEWAY_TOOLS = [DRAFT_EFFECT, COMMIT_EFFECT, DISCARD_EFFECT] as const;
 
 export const REVERSIBILITY_CLASSES = ['reversible', 'compensatable', 'irreversible'] as const;
@@ -273,6 +280,8 @@ export interface EffectGatewayOptions {
   approvalNotifier?: (approval: PendingApproval, evidence: ApprovalEvidenceView) => Promise<void>;
   /** Selects which `sampled` commits route to human review; default never samples. */
   sampler?: (record: EffectDraftRecord) => boolean;
+  /** Post-hoc sampling QA loop (Milestone 19): samples auto-commits for review and trips auto-commit off on a high disagreement rate. */
+  qa?: SamplingQa;
   auditLogger?: (event: EffectAuditEvent) => void;
   approvalTimeoutMinutes?: number;
   now?: () => number;
@@ -316,6 +325,7 @@ export class EffectGateway {
   private readonly evidenceResolver?: VerificationResolver;
   private readonly approvalNotifier?: (approval: PendingApproval, evidence: ApprovalEvidenceView) => Promise<void>;
   private readonly sampler: (record: EffectDraftRecord) => boolean;
+  private readonly qa?: SamplingQa;
   private readonly auditLogger?: (event: EffectAuditEvent) => void;
   private readonly approvalTimeoutMinutes: number;
   private readonly now: () => number;
@@ -331,6 +341,7 @@ export class EffectGateway {
     this.evidenceResolver = options.evidenceResolver;
     this.approvalNotifier = options.approvalNotifier;
     this.sampler = options.sampler ?? (() => false);
+    this.qa = options.qa;
     this.auditLogger = options.auditLogger;
     this.approvalTimeoutMinutes = options.approvalTimeoutMinutes ?? 15;
     this.now = options.now ?? Date.now;
@@ -512,9 +523,12 @@ export class EffectGateway {
     }
 
     const humanRequired = requiresHumanActor(record);
-    const sampledForReview = !humanRequired && record.approvalClass === 'sampled' && this.sampler(record);
+    // Milestone 19: a tripped sampling-QA breaker disables auto-commit for the
+    // type, forcing a pre-commit human approval exactly like `always_human`.
+    const forcedByQaBreaker = !humanRequired && this.qa?.isTripped(record.effectType) === true;
+    const sampledForReview = !humanRequired && !forcedByQaBreaker && record.approvalClass === 'sampled' && this.sampler(record);
     let actor: EffectActor;
-    if (humanRequired || sampledForReview) {
+    if (humanRequired || forcedByQaBreaker || sampledForReview) {
       const resolution = await this.resolveCommitApproval(caller, record, evidence);
       if (resolution.pending) {
         return { committed: false, approvalPending: true, approvalId: resolution.approvalId };
@@ -522,7 +536,9 @@ export class EffectGateway {
       if (resolution.problem !== undefined || !resolution.actor) {
         const clause = humanRequired
           ? `is ${record.reversibility} under approval class '${record.approvalClass}'`
-          : `was sampled for human review under approval class '${record.approvalClass}'`;
+          : forcedByQaBreaker
+            ? `has auto-commit disabled by the sampling-QA circuit breaker`
+            : `was sampled for human review under approval class '${record.approvalClass}'`;
         return refusedCommit(ref, `effect type '${record.effectType}' ${clause} — ${resolution.problem}`);
       }
       actor = resolution.actor;
@@ -558,6 +574,12 @@ export class EffectGateway {
 
     const decided = this.store.getDraft(record.id)!;
     this.audit('effect_commit', decided);
+    // Milestone 19: an agent-actor commit (no human in the loop) is a candidate
+    // for post-hoc sampling QA. Routing is non-blocking and after the fact — the
+    // commit already succeeded; the review only feeds the disagreement breaker.
+    if (actor.kind === 'agent') {
+      this.routePostHocReview(record, evidence);
+    }
     return {
       committed: true,
       idempotentReplay: false,
@@ -766,6 +788,83 @@ export class EffectGateway {
     return { actor: { kind: 'human', approver_id: approver } };
   }
 
+  /**
+   * Milestone 19: after an agent-actor commit, route a configurable percentage
+   * of the type's commits to post-hoc review through the existing approval
+   * surface (a `PendingApproval` of tool name `review_commit`, notified the same
+   * way a pre-commit `always_human`/`sampled` approval is). This is non-blocking
+   * and best-effort: the commit has already happened, so a missing approval
+   * store or a failed notifier must never fail the commit — the review simply
+   * is not created.
+   */
+  private routePostHocReview(
+    record: EffectDraftRecord,
+    evidence: Array<{ ref: string; result: VerificationView | null }>
+  ): void {
+    if (!this.qa || !this.qa.shouldReview(record.effectType)) {
+      return;
+    }
+    if (!this.approvalStore) {
+      return;
+    }
+    const requestedAt = this.now();
+    const approval: PendingApproval = {
+      id: `appr_${record.correlationId}_${SERVER_ALIAS}_${REVIEW_COMMIT}_${requestedAt}_${randomUUID()}`,
+      sessionId: record.sessionId,
+      teamId: record.sessionId,
+      correlationId: record.correlationId,
+      serverAlias: SERVER_ALIAS,
+      toolName: REVIEW_COMMIT,
+      paramsJson: JSON.stringify({ draft_ref: draftRef(record.id), effect_type: record.effectType }),
+      requestedAt,
+      timeoutAt: requestedAt + this.approvalTimeoutMinutes * 60_000,
+      requestHash: this.reviewRequestHash(record),
+    };
+    this.approvalStore.createApproval(approval);
+    void this.notify(approval, this.approvalEvidenceView(record, evidence));
+  }
+
+  /**
+   * Records a reviewer's verdict on a `review_commit` approval into the QA loop
+   * (`approved` -> `agreed`, `denied` -> `disagreed`), tripping the breaker if
+   * the disagreement rate crosses the type's threshold. Returns the updated
+   * stat, or `undefined` when the approval is not a post-hoc review (or no QA
+   * loop is configured). This is the seam the approval-resolution surface
+   * (dashboard / Slack / Teams) calls after a human decides.
+   */
+  recordReviewVerdict(approvalId: string, decision: ReviewDecision): ReturnType<SamplingQa['recordVerdict']> | undefined {
+    if (!this.qa || !this.approvalStore) {
+      return undefined;
+    }
+    const approval = this.approvalStore.getApproval(approvalId);
+    if (!approval || approval.serverAlias !== SERVER_ALIAS || approval.toolName !== REVIEW_COMMIT) {
+      return undefined;
+    }
+    const effectType = effectTypeOfParams(approval.paramsJson);
+    if (effectType === undefined) {
+      return undefined;
+    }
+    return this.qa.recordVerdict({
+      effectType,
+      correlationId: approval.correlationId,
+      draftRef: draftRefOfParams(approval.paramsJson) ?? '',
+      decision,
+      reviewedAt: this.now(),
+    });
+  }
+
+  private reviewRequestHash(record: EffectDraftRecord): string {
+    return createHash('sha256')
+      .update(SERVER_ALIAS)
+      .update(HASH_DELIMITER)
+      .update(REVIEW_COMMIT)
+      .update(HASH_DELIMITER)
+      .update(draftRef(record.id))
+      .update(HASH_DELIMITER)
+      .update(record.correlationId)
+      .digest('hex');
+  }
+
   private commitRequestHash(record: EffectDraftRecord): string {
     return createHash('sha256')
       .update(SERVER_ALIAS)
@@ -929,6 +1028,18 @@ function draftRefOfParams(paramsJson: string): string | undefined {
     const parsed = JSON.parse(paramsJson);
     if (parsed && typeof parsed === 'object' && typeof (parsed as Record<string, unknown>).draft_ref === 'string') {
       return (parsed as Record<string, string>).draft_ref;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function effectTypeOfParams(paramsJson: string): string | undefined {
+  try {
+    const parsed = JSON.parse(paramsJson);
+    if (parsed && typeof parsed === 'object' && typeof (parsed as Record<string, unknown>).effect_type === 'string') {
+      return (parsed as Record<string, string>).effect_type;
     }
     return undefined;
   } catch {

@@ -111,6 +111,7 @@ export {
   DRAFT_EFFECT,
   COMMIT_EFFECT,
   DISCARD_EFFECT,
+  REVIEW_COMMIT,
   GATEWAY_TOOLS,
   REVERSIBILITY_CLASSES,
   APPROVAL_CLASSES,
@@ -127,3 +128,15 @@ export {
   type CommitEffectResult,
   type DiscardEffectResult,
 } from './effect-gateway.js';
+export {
+  SamplingQa,
+  createMemorySamplingQaStore,
+  createSqliteSamplingQaStore,
+  makeSamplingQaPolicy,
+  samplingQaPoliciesFromRecord,
+  type ReviewDecision,
+  type SamplingQaPolicy,
+  type PostHocReviewVerdict,
+  type SamplingQaStat,
+  type SamplingQaStore,
+} from './sampling-qa.js';
