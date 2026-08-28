@@ -47,3 +47,13 @@ output "toolshed_principal_id" {
   description = "Toolshed managed identity principal ID."
   value       = azurerm_user_assigned_identity.main["toolshed"].principal_id
 }
+
+output "queue_ingress_id" {
+  description = "Queue-ingress managed identity ID."
+  value       = azurerm_user_assigned_identity.main["queue_ingress"].id
+}
+
+output "queue_ingress_principal_id" {
+  description = "Queue-ingress managed identity principal ID."
+  value       = azurerm_user_assigned_identity.main["queue_ingress"].principal_id
+}

@@ -43,11 +43,12 @@ module "managed_identity" {
   location            = var.location
   tags                = local.common_tags
   names = {
-    orchestrator = "mi-orch-${local.base_name}"
-    slack_bot    = "mi-slack-${local.base_name}"
-    teams_bot    = "mi-teams-${local.base_name}"
-    dashboard    = "mi-dash-${local.base_name}"
-    toolshed     = "mi-toolshed-${local.base_name}"
+    orchestrator  = "mi-orch-${local.base_name}"
+    slack_bot     = "mi-slack-${local.base_name}"
+    teams_bot     = "mi-teams-${local.base_name}"
+    dashboard     = "mi-dash-${local.base_name}"
+    toolshed      = "mi-toolshed-${local.base_name}"
+    queue_ingress = "mi-queue-ingress-${local.base_name}"
   }
 }
 
@@ -136,6 +137,14 @@ module "service_bus" {
     {
       principal_id         = module.managed_identity.orchestrator_principal_id
       role_definition_name = "Azure Service Bus Data Receiver"
+    },
+    {
+      principal_id         = module.managed_identity.queue_ingress_principal_id
+      role_definition_name = "Azure Service Bus Data Sender"
+    },
+    {
+      principal_id         = module.managed_identity.queue_ingress_principal_id
+      role_definition_name = "Azure Service Bus Data Receiver"
     }
   ]
 }
@@ -188,9 +197,17 @@ module "container_apps" {
   subnet_id        = module.networking.container_apps_subnet_id
 
   orchestrator = {
-    name             = "ca-orchestrator-${var.environment}"
-    identity_id      = module.managed_identity.orchestrator_id
-    image            = "${module.container_registry.login_server}/orchestrator:latest"
+    name         = "ca-orchestrator-${var.environment}"
+    identity_id  = module.managed_identity.orchestrator_id
+    image        = "${module.container_registry.login_server}/orchestrator:latest"
+    min_replicas = 1
+    max_replicas = 5
+  }
+
+  queue_ingress = {
+    name             = "ca-queue-ingress-${var.environment}"
+    identity_id      = module.managed_identity.queue_ingress_id
+    image            = "${module.container_registry.login_server}/queue-ingress:latest"
     min_replicas     = 1
     max_replicas     = 5
     service_bus_rule = module.service_bus.scale_rule

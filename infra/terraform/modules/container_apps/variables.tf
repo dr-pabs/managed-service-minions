@@ -24,7 +24,18 @@ variable "log_analytics_workspace_id" {
 }
 
 variable "orchestrator" {
-  description = "Configuration for the orchestrator container app."
+  description = "Configuration for the orchestrator container app (goose serve)."
+  type = object({
+    name         = string
+    identity_id  = string
+    image        = string
+    min_replicas = number
+    max_replicas = number
+  })
+}
+
+variable "queue_ingress" {
+  description = "Configuration for the queue-ingress container app (Milestone 15)."
   type = object({
     name             = string
     identity_id      = string

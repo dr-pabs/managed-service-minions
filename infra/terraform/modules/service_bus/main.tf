@@ -7,17 +7,15 @@ resource "azurerm_servicebus_namespace" "main" {
   tags = var.tags
 }
 
-resource "azurerm_servicebus_topic" "minion_tasks" {
-  name                 = var.topic_name
-  namespace_id         = azurerm_servicebus_namespace.main.id
-  partitioning_enabled = false
-}
+# Milestone 15: the work queue is now first-class. A single Service Bus queue
+# (not a topic + subscriptions) is what the queue-ingress consumes; the KEDA
+# scaler targets its depth directly. `max_delivery_count = 3` mirrors the
+# queue-ingress processor's default poison threshold, so an item that fails
+# three times dead-letters rather than looping forever.
+resource "azurerm_servicebus_queue" "work_items" {
+  name         = var.queue_name
+  namespace_id = azurerm_servicebus_namespace.main.id
 
-resource "azurerm_servicebus_subscription" "minions" {
-  for_each = toset(var.subscriptions)
-
-  name               = each.value
-  topic_id           = azurerm_servicebus_topic.minion_tasks.id
   max_delivery_count = 3
 }
 

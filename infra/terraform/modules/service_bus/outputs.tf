@@ -20,16 +20,16 @@ output "primary_connection_string" {
   sensitive   = true
 }
 
-output "topic_id" {
-  description = "Service Bus topic ID."
-  value       = azurerm_servicebus_topic.minion_tasks.id
+output "queue_id" {
+  description = "Service Bus work-item queue ID."
+  value       = azurerm_servicebus_queue.work_items.id
 }
 
 output "scale_rule" {
-  description = "KEDA scale rule configuration for the orchestrator."
+  description = "KEDA scale rule configuration for the queue-ingress (Milestone 15)."
   value = {
-    topic_name        = azurerm_servicebus_topic.minion_tasks.name
-    namespace_name    = azurerm_servicebus_namespace.main.name
-    subscription_name = "code-explorer"
+    queue_name     = azurerm_servicebus_queue.work_items.name
+    namespace_name = azurerm_servicebus_namespace.main.name
+    message_count  = "3"
   }
 }

@@ -70,16 +70,85 @@ resource "azurerm_container_app" "orchestrator" {
         path = "/data"
       }
     }
+  }
+
+  dynamic "secret" {
+    for_each = local.secret_keys
+    content {
+      name  = local.secret_names[secret.value]
+      value = var.secrets[secret.value]
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image
+    ]
+  }
+}
+
+# Milestone 15: the queue-ingress is the Service Bus work-queue consumer. It
+# runs the same orchestrator runner the chat/webhook ingresses use (in-process)
+# and is the KEDA scaling target — scaled on the work queue's depth (queue-mode
+# metadata), which replaced the topic+subscription scaler that previously lived
+# on the orchestrator app.
+resource "azurerm_container_app" "queue_ingress" {
+  name                         = var.queue_ingress.name
+  resource_group_name          = var.resource_group_name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  revision_mode                = "Single"
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [var.queue_ingress.identity_id]
+  }
+
+  template {
+    min_replicas = var.queue_ingress.min_replicas
+    max_replicas = var.queue_ingress.max_replicas
+
+    volume {
+      name         = "sqlite-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_container_app_environment_storage.sqlite.name
+    }
+
+    container {
+      name   = "queue-ingress"
+      image  = var.queue_ingress.image
+      cpu    = 1.0
+      memory = "2Gi"
+
+      dynamic "env" {
+        for_each = var.env_vars
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.secret_keys
+        content {
+          name        = env.value
+          secret_name = local.secret_names[env.value]
+        }
+      }
+
+      volume_mounts {
+        name = "sqlite-data"
+        path = "/data"
+      }
+    }
 
     custom_scale_rule {
-      name             = "service-bus-scale"
+      name             = "service-bus-queue-scale"
       custom_rule_type = "azure-servicebus"
 
       metadata = {
-        namespaceName    = var.orchestrator.service_bus_rule.namespace_name
-        topicName        = var.orchestrator.service_bus_rule.topic_name
-        subscriptionName = var.orchestrator.service_bus_rule.subscription_name
-        messageCount     = "3"
+        namespaceName = var.queue_ingress.service_bus_rule.namespace_name
+        queueName     = var.queue_ingress.service_bus_rule.queue_name
+        messageCount  = var.queue_ingress.service_bus_rule.message_count
       }
 
       authentication {
