@@ -104,7 +104,7 @@ export class WorkItemProcessor implements MessageProcessor {
       return { status: 'dead_lettered', reason: DEAD_LETTER_MALFORMED_ENVELOPE };
     }
 
-    const recorded = this.deps.outcomes.get(item.idempotency_key);
+    const recorded = await this.deps.outcomes.get(item.idempotency_key);
     if (recorded) {
       await this.deps.queue.complete(message);
       return { status: 'completed', result: recorded.result, shortCircuited: true };
@@ -129,7 +129,7 @@ export class WorkItemProcessor implements MessageProcessor {
       return { status: 'abandoned', reason: err instanceof Error ? err.message : String(err) };
     }
 
-    this.deps.outcomes.set(item.idempotency_key, {
+    await this.deps.outcomes.set(item.idempotency_key, {
       status: 'completed',
       result,
       completedAt: Date.now(),

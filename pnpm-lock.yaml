@@ -303,9 +303,15 @@ importers:
 
   extensions/queue-ingress:
     dependencies:
+      '@azure/data-tables':
+        specifier: ^13.3.0
+        version: 13.3.2
       '@azure/service-bus':
         specifier: ^7.9.0
         version: 7.9.5
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       framework-core:
         specifier: workspace:*
         version: link:../../packages/framework-core

@@ -13,31 +13,37 @@ export interface RecordedOutcome {
 }
 
 /**
- * Key-value store of completed idempotency keys -> recorded outcome. In
- * production this would be backed by durable storage shared across replicas;
- * for Milestone 15 the in-memory implementation below is the reference
- * backend (mirrors `createMemoryStore` in `mcp-toolshed`'s `store.ts`), and
- * the interface is what keeps a durable swap-in a drop-in replacement.
+ * Key-value store of completed idempotency keys -> recorded outcome
+ * (remediation Milestone 4). The interface is async because the durable
+ * implementation is Azure Tables: `set` is an insert-if-absent whose 409
+ * means another replica recorded the same outcome first — first writer wins,
+ * which is exactly the duplicate semantics the consumer needs. The in-memory
+ * implementation below remains the local-dev / single-process backend;
+ * production wiring (`src/index.ts`) selects the table-backed store when
+ * `IDEMPOTENCY_STATE_CONNECTION_STRING` is set, so the at-most-once guarantee
+ * survives restarts and holds across the queue consumer's 1-5 replicas.
  */
 export interface IdempotencyStore {
-  get(key: string): RecordedOutcome | undefined;
-  set(key: string, outcome: RecordedOutcome): void;
+  get(key: string): Promise<RecordedOutcome | undefined>;
+  set(key: string, outcome: RecordedOutcome): Promise<void>;
 }
 
 /**
- * In-memory `IdempotencyStore` (Milestone 15): a `Map`-backed implementation
- * used for local dev and every test. Not durable across restarts — a process
- * restart re-runs in-flight items, which is acceptable for this milestone's
- * single-replica governance posture (ADR-025) and out of scope to harden.
+ * In-memory `IdempotencyStore`: a `Map`-backed implementation used for local
+ * dev and every test. Not durable across restarts and not shared between
+ * replicas — with queue-ingress scaled beyond one replica (the M18 posture
+ * that superseded ADR-025), a duplicate landing on another replica re-runs,
+ * so deployments that care set `IDEMPOTENCY_STATE_CONNECTION_STRING` and get
+ * the table-backed store instead.
  */
 export class InMemoryIdempotencyStore implements IdempotencyStore {
   private outcomes = new Map<string, RecordedOutcome>();
 
-  get(key: string): RecordedOutcome | undefined {
+  async get(key: string): Promise<RecordedOutcome | undefined> {
     return this.outcomes.get(key);
   }
 
-  set(key: string, outcome: RecordedOutcome): void {
+  async set(key: string, outcome: RecordedOutcome): Promise<void> {
     this.outcomes.set(key, outcome);
   }
 }

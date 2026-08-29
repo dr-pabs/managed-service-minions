@@ -137,6 +137,15 @@ export interface ItemPipelineDeps {
   bridgeSecret?: string;
   /** Blended USD price per 1,000 tokens for pricing model calls (Milestone 17). Defaults to 0 (uncapped items never spend). */
   pricePer1kTokensUsd?: number;
+  /**
+   * Charged exactly once per item at terminal settle with the item ledger's
+   * final spend — committed, dead-lettered (including the partial spend of a
+   * `BUDGET_EXCEEDED` halt), escalated, bridged, and rethrown failures alike
+   * (remediation Milestone 3: the daily budget was gated but never charged;
+   * `src/index.ts` wires this to `DailyBudget.record` so the day cap can
+   * actually trip).
+   */
+  onItemCost?: (costUsd: number) => void;
   now?: () => number;
   random?: () => number;
 }
@@ -443,11 +452,34 @@ async function commitEffect(
  * correlation id, and every model call is priced against the item's cost
  * ledger (Milestone 17) so a runaway item halts itself rather than the queue
  * around it.
+ *
+ * The item's final spend is handed to `deps.onItemCost` exactly once, at
+ * terminal settle, on every exit path (remediation Milestone 3) — the daily
+ * budget charges there, so a day cap configured via
+ * `DAILY_BUDGET_MAX_COST_USD` genuinely trips.
  */
 export async function runItemPipeline(
   config: ItemPipelineConfig,
   deps: ItemPipelineDeps,
   item: WorkItem
+): Promise<PipelineOutcome> {
+  const account: CostAccount = {
+    ledger: createItemCostLedger(config.max_cost_usd, config.warn_at_pct),
+    pricePer1kTokensUsd: deps.pricePer1kTokensUsd ?? 0,
+  };
+  try {
+    return await runItemPipelineWithAccount(config, deps, item, account);
+  } finally {
+    deps.onItemCost?.(account.ledger.spentUsd);
+  }
+}
+
+/** {@link runItemPipeline}'s engine, driven against a pre-built cost account. */
+async function runItemPipelineWithAccount(
+  config: ItemPipelineConfig,
+  deps: ItemPipelineDeps,
+  item: WorkItem,
+  account: CostAccount
 ): Promise<PipelineOutcome> {
   const now = deps.now ?? Date.now;
   const random = deps.random ?? Math.random;
@@ -456,11 +488,6 @@ export async function runItemPipeline(
     { agent_id: config.act.agent, scope_id: item.idempotency_key, correlation_id: correlationId },
     deps.secret
   );
-
-  const account: CostAccount = {
-    ledger: createItemCostLedger(config.max_cost_usd, config.warn_at_pct),
-    pricePer1kTokensUsd: deps.pricePer1kTokensUsd ?? 0,
-  };
 
   let lastResults: VerificationResult[] = [];
   let attempts = 0;

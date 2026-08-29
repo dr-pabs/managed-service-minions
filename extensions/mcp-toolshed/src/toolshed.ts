@@ -77,9 +77,10 @@ export interface ToolshedState {
   signingSecret?: string;
   /**
    * Dev-only escape hatch (`TOOLSHED_ALLOW_UNSIGNED=1`): when true, a caller
-   * may fall back to self-reported `minionType`/`teamId`/`sessionId` params
-   * instead of a verified token. Always default-off; every use is logged
-   * loudly by the caller (`server.ts`) at startup.
+   * without a token resolves to the fixed `dev-unsigned` principal (never a
+   * self-reported identity — those fields are gone, remediation Milestone
+   * 12). Always default-off; every use is logged loudly by the caller
+   * (`server.ts`) at startup.
    */
   allowUnsignedTokens: boolean;
   /**
@@ -217,18 +218,13 @@ export interface MinionIdentityInput {
   minionToken?: string;
   correlationId: string;
   attempt: number;
-  /**
-   * Legacy self-reported identity, honored ONLY on the unsigned dev path
-   * (`ToolshedState.allowUnsignedTokens` true AND no `minionToken`
-   * supplied). When a valid token is present, every one of these is
-   * ignored — trusting any of them alongside a token would let a caller
-   * with a legitimately minted token still choose its own `teamId`
-   * (rate-limit bucket, cache key, approval sessionId, audit teamId),
-   * reopening C2.
-   */
-  legacyMinionType?: string;
-  legacyTeamId?: string;
-  legacySessionId?: string;
+  // Remediation Milestone 12: the legacy self-reported identity fields
+  // (`legacyMinionType`/`legacyTeamId`/`legacySessionId`, honored only on
+  // the unsigned dev path) are GONE — self-reported identity of any kind is
+  // the trust bug `identity/v1` closed. The unsigned dev path now resolves
+  // every caller to the fixed `dev-unsigned` principal (see below), so a
+  // stray extra property in the JSON cannot choose its own agent, team, or
+  // rate-limit bucket.
 }
 
 function auditRejectedIdentity(
@@ -275,7 +271,7 @@ function auditRejectedIdentity(
  * field of `ToolContext` — `minionType`, `sessionId`, `correlationId`, and
  * `teamId` (derived from the token's `sessionId`; see the ExecPlan Decision
  * Log) — comes exclusively from the verified payload; caller-supplied
- * `legacy*` values are ignored (C2 fix). Verification happens here (inside
+ * the fixed dev principal applies (remediation Milestone 12). Verification happens here (inside
  * the pipeline module, not in `server.ts`) specifically so a rejected token
  * is itself an audited exit path, per the toolshed's "audit on every exit
  * path" invariant.
@@ -311,9 +307,10 @@ export async function verifyAndExecuteTool(
     }
     const ctx: ToolContext = {
       // teamId is derived from the token's scope_id (a work-item or session
-      // id), never from input.legacyTeamId — the token payload is the pinned
-      // identity/v1 claim set {agent_id, scope_id, correlation_id}, and
-      // Milestone 6 (M4) adds a distinct teamId to approval records.
+      // id), never from any caller-supplied field — the token payload is
+      // the pinned identity/v1 claim set {agent_id, scope_id,
+      // correlation_id}, and Milestone 6 (M4) adds a distinct teamId to
+      // approval records.
       teamId: verified.payload.scope_id,
       minionType: verified.payload.agent_id,
       sessionId: verified.payload.scope_id,
@@ -324,10 +321,15 @@ export async function verifyAndExecuteTool(
   }
 
   if (state.allowUnsignedTokens) {
+    // Remediation Milestone 12: the unsigned dev path resolves EVERY caller
+    // to one fixed principal — `dev-unsigned` on team `dev` — so local
+    // development needs no token without anyone self-reporting an identity.
+    // Rate limits, cache keys, and audit rows all key on this principal;
+    // a caller smuggling extra properties into the JSON gains nothing.
     const ctx: ToolContext = {
-      teamId: input.legacyTeamId ?? 'default',
-      minionType: input.legacyMinionType ?? '',
-      sessionId: input.legacySessionId ?? input.legacyTeamId ?? 'default',
+      teamId: 'dev',
+      minionType: 'dev-unsigned',
+      sessionId: 'dev-unsigned',
       correlationId: input.correlationId,
       attempt: input.attempt,
     };

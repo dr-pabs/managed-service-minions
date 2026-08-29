@@ -23,7 +23,7 @@
 
 ## Wiring status (honest note)
 
-The **daily** budget is wired in the production consumer (`extensions/queue-ingress/src/index.ts` builds `DailyBudget` and passes it to `consumeQueue`). The **per-item** path is library-complete but not yet wired into the production process — it lives in the item-pipeline engine (ADR-030), which production `index.ts` does not invoke yet; it is exercised by tests (`__tests__/cost-control.test.ts`, `item-pipeline.test.ts`).
+Both scopes are wired in the production consumer. The **daily** budget: `extensions/queue-ingress/src/index.ts` builds `DailyBudget` and passes it to `consumeQueue`, where it gates the consume loop for pipeline-routed and fallback items alike. The **per-item** path: `index.ts` routes matching item types through the item-pipeline engine (ADR-030 wiring, `src/pipeline-processor.ts`), which prices every model call at `PIPELINE_PRICE_PER_1K_TOKENS_USD` against the recipe's `max_cost_usd` and dead-letters a halted item as `BUDGET_EXCEEDED`. Exercised by `__tests__/cost-control.test.ts`, `item-pipeline.test.ts`, and the production-path `__tests__/production-wiring.test.ts`.
 
 ## Rejected alternatives
 

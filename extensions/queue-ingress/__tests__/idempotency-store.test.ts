@@ -8,21 +8,21 @@ const outcome = {
 };
 
 describe('InMemoryIdempotencyStore (Milestone 15)', () => {
-  it('returns undefined for an unrecorded key', () => {
+  it('returns undefined for an unrecorded key', async () => {
     const store = new InMemoryIdempotencyStore();
-    expect(store.get('missing')).toBeUndefined();
+    await expect(store.get('missing')).resolves.toBeUndefined();
   });
 
-  it('round-trips a recorded outcome', () => {
+  it('round-trips a recorded outcome', async () => {
     const store = new InMemoryIdempotencyStore();
-    store.set('key-1', outcome);
-    expect(store.get('key-1')).toEqual(outcome);
+    await store.set('key-1', outcome);
+    await expect(store.get('key-1')).resolves.toEqual(outcome);
   });
 
-  it('overwrites on a repeated set', () => {
+  it('overwrites on a repeated set', async () => {
     const store = new InMemoryIdempotencyStore();
-    store.set('key-1', outcome);
-    store.set('key-1', { ...outcome, completedAt: 999 });
-    expect(store.get('key-1')).toEqual({ ...outcome, completedAt: 999 });
+    await store.set('key-1', outcome);
+    await store.set('key-1', { ...outcome, completedAt: 999 });
+    await expect(store.get('key-1')).resolves.toEqual({ ...outcome, completedAt: 999 });
   });
 });

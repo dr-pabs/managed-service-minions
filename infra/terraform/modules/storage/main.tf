@@ -28,6 +28,15 @@ resource "azurerm_storage_table" "governance_state" {
   storage_account_name = azurerm_storage_account.main.name
 }
 
+# Forge Ops remediation Milestone 4: durable idempotency for the (1-5 replica)
+# queue-ingress consumer — completed work-item outcomes recorded so a duplicate
+# landing on another replica (or after a restart) short-circuits instead of
+# re-running. Read by queue-ingress via IDEMPOTENCY_STATE_CONNECTION_STRING.
+resource "azurerm_storage_table" "idempotency" {
+  name                 = "idempotency"
+  storage_account_name = azurerm_storage_account.main.name
+}
+
 resource "azurerm_storage_container" "minion_outputs" {
   name                  = "minion-outputs"
   storage_account_name  = azurerm_storage_account.main.name

@@ -129,6 +129,11 @@ export {
   type DiscardEffectResult,
 } from './effect-gateway.js';
 export {
+  TableCommitRecordStore,
+  type CommitRecord,
+  type CommitRecordStore,
+} from './commit-record-store.js';
+export {
   SamplingQa,
   createMemorySamplingQaStore,
   createSqliteSamplingQaStore,

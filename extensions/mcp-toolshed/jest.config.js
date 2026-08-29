@@ -17,6 +17,14 @@ export default {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  // Explicit (not jest's default): only *.test.ts files are suites. The
+  // default also matches support scripts that live under __tests__ (e.g.
+  // the azurite two-replica child), which then run outside a test context.
+  testMatch: ['**/__tests__/**/*.test.ts'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  // The azurite two-replica child is a support script driven over stdio by
+  // the integration suite, not library code — it has no in-process coverage.
+  coveragePathIgnorePatterns: ['/node_modules/', '/dist/', 'azurite-breaker-replica'],
   collectCoverageFrom: ['src/**/*.ts'],
   ...(hasTestPathPattern ? {} : {
     coverageThreshold: {
