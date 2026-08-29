@@ -57,6 +57,14 @@ const mockIdempotencyStore = { get: jest.fn(), set: jest.fn() };
 const InMemoryIdempotencyStore = jest.fn().mockImplementation(() => mockIdempotencyStore);
 jest.unstable_mockModule('../src/idempotency-store.js', () => ({ InMemoryIdempotencyStore }));
 
+const mockTableClient = { createTable: jest.fn().mockResolvedValue(undefined) };
+const TableClient = jest.fn().mockImplementation(() => mockTableClient);
+jest.unstable_mockModule('@azure/data-tables', () => ({ TableClient }));
+
+const mockTableIdempotencyStore = { get: jest.fn(), set: jest.fn() };
+const TableIdempotencyStore = jest.fn().mockImplementation(() => mockTableIdempotencyStore);
+jest.unstable_mockModule('../src/table-idempotency-store.js', () => ({ TableIdempotencyStore }));
+
 const mockProcessorInstance = { process: jest.fn() };
 const WorkItemProcessor = jest.fn().mockImplementation(() => mockProcessorInstance);
 jest.unstable_mockModule('../src/processor.js', () => ({ WorkItemProcessor }));
@@ -123,6 +131,7 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     delete process.env.PIPELINE_PRICE_PER_1K_TOKENS_USD;
     delete process.env.FORGE_INTAKE_URL;
     delete process.env.FORGE_BRIDGE_SECRET;
+    delete process.env.IDEMPOTENCY_STATE_CONNECTION_STRING;
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -190,7 +199,7 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     await import('../src/index.js');
     await flushMicrotasks();
 
-    expect(warnSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('SERVICE_BUS_CONNECTION_STRING'));
     expect(InMemoryWorkItemQueue).not.toHaveBeenCalled();
     expect(ServiceBusWorkItemQueue.connect).toHaveBeenCalledWith('Endpoint=sb://ns', 'my-queue');
     expect(consumeQueue).toHaveBeenCalledWith({
@@ -243,6 +252,53 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     const consumeArg = consumeQueue.mock.calls[0][0];
     expect(consumeArg.store).toBe(mockSqliteStore);
     expect(consumeArg.dailyBudget).toBeUndefined();
+  });
+
+  it('uses the in-memory idempotency store (with a loud warning) when no connection string is set', async () => {
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(InMemoryIdempotencyStore).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('IDEMPOTENCY_STATE_CONNECTION_STRING is not set'));
+    expect(WorkItemProcessor.mock.calls[0][0].outcomes).toBe(mockIdempotencyStore);
+  });
+
+  it('uses the table-backed idempotency store when IDEMPOTENCY_STATE_CONNECTION_STRING is set', async () => {
+    process.env.IDEMPOTENCY_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(TableClient).toHaveBeenCalledWith('UseDevelopmentStorage=true', 'idempotency');
+    expect(mockTableClient.createTable).toHaveBeenCalledTimes(1);
+    expect(TableIdempotencyStore).toHaveBeenCalledWith(mockTableClient);
+    expect(WorkItemProcessor.mock.calls[0][0].outcomes).toBe(mockTableIdempotencyStore);
+    expect(InMemoryIdempotencyStore).not.toHaveBeenCalled();
+  });
+
+  it('treats a createTable 409 (table already exists) as the normal second-boot path', async () => {
+    process.env.IDEMPOTENCY_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+    const conflict = new Error('HTTP 409') as Error & { statusCode: number };
+    conflict.statusCode = 409;
+    mockTableClient.createTable.mockRejectedValueOnce(conflict);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(errorSpy).not.toHaveBeenCalledWith('Queue ingress failed to start', expect.anything());
+    expect(TableIdempotencyStore).toHaveBeenCalledWith(mockTableClient);
+  });
+
+  it('fails startup loudly when the idempotency table cannot be created for another reason', async () => {
+    process.env.IDEMPOTENCY_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+    const outage = new Error('HTTP 503') as Error & { statusCode: number };
+    outage.statusCode = 503;
+    mockTableClient.createTable.mockRejectedValueOnce(outage);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(errorSpy).toHaveBeenCalledWith('Queue ingress failed to start', expect.anything());
   });
 
   it('charges settled pipeline items into the daily budget (onItemCost is wired to DailyBudget.record)', async () => {

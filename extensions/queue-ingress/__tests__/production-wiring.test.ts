@@ -183,7 +183,7 @@ describe('production wiring: pipeline-routed items through the index.ts composit
     expect(queue.deadLetters()).toHaveLength(0);
 
     // The outcome is recorded, so a redelivery of the same key short-circuits.
-    expect(outcomes.get('key-1')).toBeDefined();
+    await expect(outcomes.get('key-1')).resolves.toBeDefined();
     queue.enqueue(refundItem());
     const second = await drain(queue, processor, 1);
     expect(second.results[0]).toMatchObject({ status: 'completed', shortCircuited: true });

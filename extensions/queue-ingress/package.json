@@ -19,6 +19,7 @@
     "test:soak": "NODE_OPTIONS='--experimental-vm-modules' jest --config jest.soak.config.js"
   },
   "dependencies": {
+    "@azure/data-tables": "^13.3.0",
     "@azure/service-bus": "^7.9.0",
     "framework-core": "workspace:*",
     "js-yaml": "^4.1.0",

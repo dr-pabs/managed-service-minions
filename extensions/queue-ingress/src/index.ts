@@ -1,10 +1,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TableClient } from '@azure/data-tables';
 import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool, EffectGateway, makeEffectTypePolicy, type EffectTypePolicy } from 'mcp-toolshed';
 import { createOrchestratorRunner, createHttpGooseClient } from 'orchestrator';
 import { consumeQueue } from './consumer.js';
 import { DailyBudget } from './cost-control.js';
-import { InMemoryIdempotencyStore } from './idempotency-store.js';
+import { InMemoryIdempotencyStore, type IdempotencyStore } from './idempotency-store.js';
+import { TableIdempotencyStore } from './table-idempotency-store.js';
 import {
   assertPriced,
   buildEscalateEmitter,
@@ -84,6 +86,38 @@ function buildPricePer1kTokens(raw: string | undefined): number {
   return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
+/** The table the durable idempotency store records completed outcomes in. */
+const IDEMPOTENCY_TABLE = 'idempotency';
+
+/**
+ * Builds the idempotency store (remediation Milestone 4). With
+ * `IDEMPOTENCY_STATE_CONNECTION_STRING` set, completed outcomes live in Azure
+ * Tables — durable across restarts and shared across the queue consumer's
+ * 1-5 replicas, first-writer-wins on a concurrent duplicate — so the
+ * at-most-once guarantee of Milestone 15 holds at deployment scale. Without
+ * it, the in-memory store (local dev / single-process) keeps today's
+ * behaviour, with a loud warning about what that means.
+ */
+async function buildOutcomes(): Promise<IdempotencyStore> {
+  const connectionString = process.env.IDEMPOTENCY_STATE_CONNECTION_STRING;
+  if (!connectionString) {
+    console.warn(
+      '[queue-ingress] IDEMPOTENCY_STATE_CONNECTION_STRING is not set -- using the in-memory idempotency store: duplicates re-run across restarts or other replicas. Set it (TableEndpoint under the same storage account the toolshed uses) to make at-most-once hold at scale.'
+    );
+    return new InMemoryIdempotencyStore();
+  }
+  const client = new TableClient(connectionString, IDEMPOTENCY_TABLE);
+  try {
+    await client.createTable();
+  } catch (err) {
+    // 409 — the table already exists — is the normal second-boot path.
+    if (!(typeof err === 'object' && err !== null && (err as { statusCode?: unknown }).statusCode === 409)) {
+      throw err;
+    }
+  }
+  return new TableIdempotencyStore(client);
+}
+
 async function main(): Promise<void> {
   const queue = await buildQueue();
   const store = createSqliteStore(config.sqlitePath);
@@ -98,7 +132,7 @@ async function main(): Promise<void> {
     secret: config.signingSecret,
   });
 
-  const outcomes = new InMemoryIdempotencyStore();
+  const outcomes = await buildOutcomes();
   const fallback = new WorkItemProcessor({ runner, queue, outcomes });
 
   // The daily throughput budget gates the consume loop (below) AND is charged

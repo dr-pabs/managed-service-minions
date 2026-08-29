@@ -294,7 +294,7 @@ export class PipelineWorkItemProcessor implements MessageProcessor {
       return this.deps.fallback.process(message);
     }
 
-    const recorded = this.deps.outcomes.get(item.idempotency_key);
+    const recorded = await this.deps.outcomes.get(item.idempotency_key);
     if (recorded) {
       await this.deps.queue.complete(message);
       return { status: 'completed', result: recorded.result, shortCircuited: true };

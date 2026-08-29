@@ -345,7 +345,7 @@ describe('PipelineWorkItemProcessor', () => {
 
   it('short-circuits a redelivered completed item without re-running the pipeline (at-most-once)', async () => {
     const { processor, queue, outcomes, runPipeline } = makeProcessor({});
-    outcomes.set(item.idempotency_key, { status: 'completed', result: { text: 'done' }, completedAt: 1 });
+    await outcomes.set(item.idempotency_key, { status: 'completed', result: { text: 'done' }, completedAt: 1 });
     const result = await processor.process(message(item));
     expect(result).toEqual({ status: 'completed', result: { text: 'done' }, shortCircuited: true });
     expect(queue.complete).toHaveBeenCalled();
@@ -377,7 +377,7 @@ describe('PipelineWorkItemProcessor', () => {
     if (result.status !== 'completed') return;
     expect(result.shortCircuited).toBe(false);
     expect(result.result.text).toContain('committed via its item pipeline after 2 attempt(s)');
-    expect(outcomes.get(item.idempotency_key)).toEqual({
+    await expect(outcomes.get(item.idempotency_key)).resolves.toEqual({
       status: 'completed',
       result: result.result,
       completedAt: 1_700_000_000_000,
@@ -396,7 +396,9 @@ describe('PipelineWorkItemProcessor', () => {
     const before = Date.now();
     const { processor, outcomes } = makeProcessor({ deps, outcome: outcome({ status: 'committed' }) });
     await processor.process(message(item));
-    expect(outcomes.get(item.idempotency_key)!.completedAt).toBeGreaterThanOrEqual(before);
+    await expect(outcomes.get(item.idempotency_key)).resolves.toMatchObject({ completedAt: expect.any(Number) });
+    const recorded = await outcomes.get(item.idempotency_key);
+    expect(recorded!.completedAt).toBeGreaterThanOrEqual(before);
   });
 
   it('completes a bridged item whose resolution is resolved', async () => {
@@ -440,7 +442,7 @@ describe('PipelineWorkItemProcessor', () => {
     expect(result).toEqual({ status: 'dead_lettered', reason: DEAD_LETTER_ESCALATION_UNRESOLVED });
     expect(queue.deadLetter).toHaveBeenCalledWith(expect.anything(), DEAD_LETTER_ESCALATION_UNRESOLVED);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('unresolved'));
-    expect(outcomes.get(item.idempotency_key)).toBeUndefined();
+    await expect(outcomes.get(item.idempotency_key)).resolves.toBeUndefined();
   });
 
   it("dead-letters with the pipeline's own reason (e.g. BUDGET_EXCEEDED) on a dead_lettered outcome", async () => {
