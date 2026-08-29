@@ -62,7 +62,14 @@ export function toRunnerRequest(item: WorkItem): IngressRequest & { sessionId: s
 }
 
 function payloadToText(payload: unknown): string {
-  return typeof payload === 'string' ? payload : JSON.stringify(payload);
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  try {
+    return JSON.stringify(payload) ?? 'null';
+  } catch {
+    return String(payload);
+  }
 }
 
 /**
