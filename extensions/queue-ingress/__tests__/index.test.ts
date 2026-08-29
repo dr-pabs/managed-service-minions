@@ -21,6 +21,7 @@ jest.unstable_mockModule('mcp-toolshed', () => ({
   verifyAndExecuteTool,
   EffectGateway,
   makeEffectTypePolicy,
+  TableCommitRecordStore,
 }));
 
 const mockOrchestratorRunner = { run: jest.fn() };
@@ -64,6 +65,9 @@ jest.unstable_mockModule('@azure/data-tables', () => ({ TableClient }));
 const mockTableIdempotencyStore = { get: jest.fn(), set: jest.fn() };
 const TableIdempotencyStore = jest.fn().mockImplementation(() => mockTableIdempotencyStore);
 jest.unstable_mockModule('../src/table-idempotency-store.js', () => ({ TableIdempotencyStore }));
+
+const mockTableCommitRecordStore = { get: jest.fn(), set: jest.fn() };
+const TableCommitRecordStore = jest.fn().mockImplementation(() => mockTableCommitRecordStore);
 
 const mockProcessorInstance = { process: jest.fn() };
 const WorkItemProcessor = jest.fn().mockImplementation(() => mockProcessorInstance);
@@ -132,6 +136,7 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     delete process.env.FORGE_INTAKE_URL;
     delete process.env.FORGE_BRIDGE_SECRET;
     delete process.env.IDEMPOTENCY_STATE_CONNECTION_STRING;
+    delete process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING;
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -139,6 +144,11 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     buildToolshedState.mockClear().mockResolvedValue(mockToolshedState);
     initializeToolshed.mockClear();
     verifyAndExecuteTool.mockClear().mockResolvedValue({ status: 'success', data: {} });
+    TableClient.mockClear().mockImplementation(() => mockTableClient);
+    mockTableClient.createTable.mockClear().mockResolvedValue(undefined);
+    TableCommitRecordStore.mockClear().mockImplementation(() => mockTableCommitRecordStore);
+    mockTableCommitRecordStore.get.mockReset();
+    mockTableCommitRecordStore.set.mockReset();
     EffectGateway.mockClear().mockImplementation(() => mockGatewayInstance);
     makeEffectTypePolicy.mockClear();
     createOrchestratorRunner.mockClear().mockReturnValue(mockOrchestratorRunner);
@@ -299,6 +309,61 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     await flushMicrotasks();
 
     expect(errorSpy).toHaveBeenCalledWith('Queue ingress failed to start', expect.anything());
+  });
+
+  it('hands the effect gateway the durable commit-record store when the governance connection string is set', async () => {
+    process.env.TOOLSHED_SIGNING_SECRET = 'the-secret';
+    process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+    const pipelines = new Map([['refund_request', loadedRefundPipeline()]]);
+    loadPipelines.mockImplementation(() => pipelines);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(TableClient).toHaveBeenCalledWith('UseDevelopmentStorage=true', 'commits');
+    expect(TableCommitRecordStore).toHaveBeenCalledWith(mockTableClient);
+    expect(EffectGateway).toHaveBeenCalledWith(expect.objectContaining({ commitRecordStore: mockTableCommitRecordStore }));
+  });
+
+  it('treats a commits-table createTable 409 as the normal second-boot path', async () => {
+    process.env.TOOLSHED_SIGNING_SECRET = 'the-secret';
+    process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+    const conflict = new Error('HTTP 409') as Error & { statusCode: number };
+    conflict.statusCode = 409;
+    mockTableClient.createTable.mockRejectedValueOnce(conflict);
+    const pipelines = new Map([['refund_request', loadedRefundPipeline()]]);
+    loadPipelines.mockImplementation(() => pipelines);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(errorSpy).not.toHaveBeenCalledWith('Queue ingress failed to start', expect.anything());
+    expect(TableCommitRecordStore).toHaveBeenCalledWith(mockTableClient);
+  });
+
+  it('fails startup loudly when the commits table cannot be created for another reason', async () => {
+    process.env.TOOLSHED_SIGNING_SECRET = 'the-secret';
+    process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = 'UseDevelopmentStorage=true';
+    const outage = new Error('HTTP 503') as Error & { statusCode: number };
+    outage.statusCode = 503;
+    mockTableClient.createTable.mockRejectedValueOnce(outage);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(errorSpy).toHaveBeenCalledWith('Queue ingress failed to start', expect.anything());
+  });
+
+  it('builds no commit-record store without the governance connection string', async () => {
+    process.env.TOOLSHED_SIGNING_SECRET = 'the-secret';
+    const pipelines = new Map([['refund_request', loadedRefundPipeline()]]);
+    loadPipelines.mockImplementation(() => pipelines);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    expect(TableCommitRecordStore).not.toHaveBeenCalled();
+    expect(EffectGateway).toHaveBeenCalledWith(expect.not.objectContaining({ commitRecordStore: expect.anything() }));
   });
 
   it('charges settled pipeline items into the daily budget (onItemCost is wired to DailyBudget.record)', async () => {

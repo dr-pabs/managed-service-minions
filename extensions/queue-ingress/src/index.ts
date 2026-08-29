@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TableClient } from '@azure/data-tables';
-import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool, EffectGateway, makeEffectTypePolicy, type EffectTypePolicy } from 'mcp-toolshed';
+import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool, EffectGateway, makeEffectTypePolicy, TableCommitRecordStore, type CommitRecordStore, type EffectTypePolicy } from 'mcp-toolshed';
 import { createOrchestratorRunner, createHttpGooseClient } from 'orchestrator';
 import { consumeQueue } from './consumer.js';
 import { DailyBudget } from './cost-control.js';
@@ -89,6 +89,33 @@ function buildPricePer1kTokens(raw: string | undefined): number {
 /** The table the durable idempotency store records completed outcomes in. */
 const IDEMPOTENCY_TABLE = 'idempotency';
 
+/** The table the effect gateway's durable commit records live in (remediation Milestone 5). */
+const COMMITS_TABLE = 'commits';
+
+/**
+ * Builds the effect gateway's durable commit-record store (remediation
+ * Milestone 5) from `TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING` — the same
+ * storage account the shared governance state rides (ADR-026), so one secret
+ * covers both tables and a gateway restart (or a second replica holding the
+ * same idempotency key) replays the recorded outcome instead of re-executing
+ * the effect. Absent keeps the in-process-only behaviour.
+ */
+async function buildCommitRecordStore(): Promise<CommitRecordStore | undefined> {
+  const connectionString = process.env.TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING;
+  if (!connectionString) {
+    return undefined;
+  }
+  const client = new TableClient(connectionString, COMMITS_TABLE);
+  try {
+    await client.createTable();
+  } catch (err) {
+    if (!(typeof err === 'object' && err !== null && (err as { statusCode?: unknown }).statusCode === 409)) {
+      throw err;
+    }
+  }
+  return new TableCommitRecordStore(client);
+}
+
 /**
  * Builds the idempotency store (remediation Milestone 4). With
  * `IDEMPOTENCY_STATE_CONNECTION_STRING` set, completed outcomes live in Azure
@@ -157,6 +184,7 @@ async function main(): Promise<void> {
   assertPriced(pipelines, pricePer1kTokensUsd);
 
   let processor: MessageProcessor = fallback;
+  const commitRecordStore = await buildCommitRecordStore();
   if (pipelines.size > 0) {
     // The Milestone 14 effect gateway is the pipeline's only commit path.
     // Policies come from each recipe's commit block; the approval class is
@@ -174,6 +202,7 @@ async function main(): Promise<void> {
       effectTypes,
       signingSecret: config.signingSecret,
       evidenceResolver: resolver,
+      ...(commitRecordStore ? { commitRecordStore } : {}),
     });
 
     const bridgeSecret = process.env.FORGE_BRIDGE_SECRET;

@@ -14,6 +14,7 @@ import {
   type EffectDraftRecord,
   type EffectDraftStore,
 } from './effect-store.js';
+import type { CommitRecordStore } from './commit-record-store.js';
 import type { ReviewDecision, SamplingQa } from './sampling-qa.js';
 
 /**
@@ -282,6 +283,13 @@ export interface EffectGatewayOptions {
   sampler?: (record: EffectDraftRecord) => boolean;
   /** Post-hoc sampling QA loop (Milestone 19): samples auto-commits for review and trips auto-commit off on a high disagreement rate. */
   qa?: SamplingQa;
+  /**
+   * Durable commit-record store (remediation Milestone 5): consulted before
+   * gating so a key committed by a previous process (or another replica)
+   * replays its recorded outcome instead of re-executing, and written before
+   * a commit is acknowledged. Absent keeps the in-process-only behaviour.
+   */
+  commitRecordStore?: CommitRecordStore;
   auditLogger?: (event: EffectAuditEvent) => void;
   approvalTimeoutMinutes?: number;
   now?: () => number;
@@ -326,6 +334,7 @@ export class EffectGateway {
   private readonly approvalNotifier?: (approval: PendingApproval, evidence: ApprovalEvidenceView) => Promise<void>;
   private readonly sampler: (record: EffectDraftRecord) => boolean;
   private readonly qa?: SamplingQa;
+  private readonly commitRecordStore?: CommitRecordStore;
   private readonly auditLogger?: (event: EffectAuditEvent) => void;
   private readonly approvalTimeoutMinutes: number;
   private readonly now: () => number;
@@ -342,6 +351,7 @@ export class EffectGateway {
     this.approvalNotifier = options.approvalNotifier;
     this.sampler = options.sampler ?? (() => false);
     this.qa = options.qa;
+    this.commitRecordStore = options.commitRecordStore;
     this.auditLogger = options.auditLogger;
     this.approvalTimeoutMinutes = options.approvalTimeoutMinutes ?? 15;
     this.now = options.now ?? Date.now;
@@ -506,6 +516,20 @@ export class EffectGateway {
     if (sibling && sibling.status === 'committed') {
       return committedReplay(sibling);
     }
+    // Remediation Milestone 5: the durable record outlives this process — a
+    // key committed before a restart (or by another replica) replays its
+    // recorded outcome without re-executing the connector.
+    if (this.commitRecordStore) {
+      const durable = await this.commitRecordStore.get(record.idempotencyKey);
+      if (durable) {
+        return {
+          committed: true,
+          idempotentReplay: true,
+          decision: durable.decision,
+          outcome: durable.outcome,
+        };
+      }
+    }
     if (record.status === 'discarded') {
       return refusedCommit(ref, `draft '${ref}' was already discarded`);
     }
@@ -574,6 +598,29 @@ export class EffectGateway {
 
     const decided = this.store.getDraft(record.id)!;
     this.audit('effect_commit', decided);
+    // Remediation Milestone 5: record the commit durably BEFORE acknowledging
+    // it. A 409 here means another replica committed the same idempotency key
+    // first — first writer wins, and the caller gets the winner's recorded
+    // outcome as a replay (the connector-level idempotency key remains the
+    // backstop against the double external execution).
+    if (this.commitRecordStore) {
+      const won = await this.commitRecordStore.put(record.idempotencyKey, {
+        decision: toDecisionRecord(decided),
+        outcome: outcome as Record<string, unknown>,
+        committedAt: this.now(),
+      });
+      if (!won) {
+        const winner = await this.commitRecordStore.get(record.idempotencyKey);
+        if (winner) {
+          return {
+            committed: true,
+            idempotentReplay: true,
+            decision: winner.decision,
+            outcome: winner.outcome,
+          };
+        }
+      }
+    }
     // Milestone 19: an agent-actor commit (no human in the loop) is a candidate
     // for post-hoc sampling QA. Routing is non-blocking and after the fact — the
     // commit already succeeded; the review only feeds the disagreement breaker.
