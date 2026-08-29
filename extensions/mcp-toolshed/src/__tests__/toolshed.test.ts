@@ -1323,7 +1323,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     consoleSpy.mockRestore();
   });
 
-  it('IGNORES caller-supplied legacyTeamId when a valid token is present (C2: identity comes only from the token)', async () => {
+  it('IGNORES caller-smuggled extra identity properties when a valid token is present (C2: identity comes only from the token)', async () => {
     const adapter = createMockAdapter('github', {
       callTool: async () => ({ content: 'hello' }),
     });
@@ -1348,9 +1348,17 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     // An attacker-chosen team_id must NOT become ctx.teamId on the verified
     // path: teamId drives the rate-limit bucket key, the cache key, the
     // persisted approval's sessionId, and the audit teamId — letting the
-    // caller pick it would reopen C2 even with a valid token in hand.
+    // caller pick it would reopen C2 even with a valid token in hand. The
+    // legacy fields are gone from the type (remediation Milestone 12), so
+    // the smuggle arrives as a stray extra property in the JSON.
+    const smuggled = {
+      minionToken: token,
+      correlationId: 'corr_1',
+      attempt: 1,
+      legacyTeamId: 'attacker-chosen-team',
+    } as unknown as Parameters<typeof verifyAndExecuteTool>[0];
     const result = await verifyAndExecuteTool(
-      { minionToken: token, correlationId: 'corr_1', attempt: 1, legacyTeamId: 'attacker-chosen-team' },
+      smuggled,
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
@@ -1455,7 +1463,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     );
 
     const result = await verifyAndExecuteTool(
-      { correlationId: 'corr_1', attempt: 1, legacyMinionType: 'code_explorer', legacyTeamId: 'team-a' },
+      { correlationId: 'corr_1', attempt: 1 },
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
@@ -1465,7 +1473,7 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
     expect(store.listAuditEntries()).toHaveLength(1);
   });
 
-  it('accepts legacy self-reported identity only when TOOLSHED_ALLOW_UNSIGNED dev flag is on', async () => {
+  it('resolves the fixed dev-unsigned principal when TOOLSHED_ALLOW_UNSIGNED dev flag is on', async () => {
     const adapter = createMockAdapter('github', {
       callTool: async () => ({ content: 'hello' }),
     });
@@ -1484,16 +1492,26 @@ describe('verifyAndExecuteTool (C1/C2 fix: identity comes only from a verified t
       })
     );
 
+    const smuggled = {
+      correlationId: 'corr_1',
+      attempt: 1,
+      legacyMinionType: 'code_explorer',
+      legacyTeamId: 'team-a',
+    } as unknown as Parameters<typeof verifyAndExecuteTool>[0];
     const result = await verifyAndExecuteTool(
-      { correlationId: 'corr_1', attempt: 1, legacyMinionType: 'code_explorer', legacyTeamId: 'team-a' },
+      smuggled,
       'github',
       'get_file_contents',
       { path: '/repo/readme.md' }
     );
-    expect(result.status).toBe('success');
+    // The dev path's FIXED principal governs: dev-unsigned on team dev,
+    // allowlisted as such (or blocked when dev-unsigned has no tools).
+    expect(result.status).toBe('blocked_by_allowlist');
+    expect(store.listAuditEntries()[0].minionType).toBe('dev-unsigned');
+    expect(store.listAuditEntries()[0].teamId).toBe('dev');
   });
 
-  it('defaults legacy sessionId/teamId when unsigned and none supplied', async () => {
+  it('defaults the dev principal sessionId/teamId when unsigned and none supplied', async () => {
     const store = createMemoryStore();
     initializeToolshed(
       createDefaultToolshedState({

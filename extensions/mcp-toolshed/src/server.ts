@@ -108,6 +108,12 @@ export async function buildToolshedState(): Promise<ReturnType<typeof createDefa
   const allowUnsignedTokens = process.env.TOOLSHED_ALLOW_UNSIGNED === '1';
   const isProduction = process.env.NODE_ENV === 'production';
 
+  if (allowUnsignedTokens) {
+    console.warn(
+      '[toolshed] TOOLSHED_ALLOW_UNSIGNED=1 is set: every unsigned caller shares the fixed dev-unsigned principal (team dev) and its allowlist. Local development only.'
+    );
+  }
+
   if (!signingSecret && isProduction) {
     throw new Error(
       '[toolshed] TOOLSHED_SIGNING_SECRET is required in production (NODE_ENV=production) to verify minion identity tokens'
@@ -264,8 +270,6 @@ export async function startToolshedServer(port: number): Promise<{ operatorHttp:
         minionToken: args.minion_token === undefined ? undefined : String(args.minion_token),
         correlationId: String(args.correlation_id),
         attempt: Number(args.attempt ?? 1),
-        legacyMinionType: args.minion_type === undefined ? undefined : String(args.minion_type),
-        legacyTeamId: args.team_id === undefined ? undefined : String(args.team_id),
       },
       String(args.server_alias),
       String(args.tool_name),
