@@ -65,7 +65,7 @@ describe('e2e: refund_request item through the declarative pipeline and the Mile
 
     // A mock system-of-record connector: the charge is $50. The act agent's
     // first $100 output will mismatch it, and the retry's $50 will match.
-    const reconcile = jest.fn(async () => ({ status: 'success', data: { amount_usd: 50 } }));
+    const reconcile = jest.fn<ItemPipelineDeps['reconcile']>(async () => ({ status: 'success', data: { amount_usd: 50 } }));
 
     // The gateway's evidence resolver is fed the actual composite result the
     // pipeline produced, so a commit is authorised by THIS run's verification,
@@ -114,13 +114,13 @@ describe('e2e: refund_request item through the declarative pipeline and the Mile
 
     // ASSERT: the act agent ran twice, and the retry carried the reconcile
     // mismatch as feedback.
-    const actCalls = goose.runMinion.mock.calls.filter((call) => call[0].minionType === 'refund_processor');
+    const actCalls = jest.mocked(goose.runMinion).mock.calls.filter((call) => call[0].minionType === 'refund_processor');
     expect(actCalls).toHaveLength(2);
-    expect(actCalls[1][0].feedback).toEqual(expect.arrayContaining([expect.stringContaining('.mismatch')]));
+    expect(actCalls[1]?.[0].feedback).toEqual(expect.arrayContaining([expect.stringContaining('.mismatch')]));
 
     // ASSERT: reconcile read the resolved order_id both times.
     expect(reconcile).toHaveBeenCalledTimes(2);
-    expect(reconcile.mock.calls[0][0].params).toEqual({ order_id: 'R-1' });
+    expect(reconcile.mock.calls[0]?.[0].params).toEqual({ order_id: 'R-1' });
 
     // ASSERT: the gateway committed exactly one effect, the corrected $50.
     expect(connector.executions).toHaveLength(1);

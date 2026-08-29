@@ -242,9 +242,9 @@ module "container_apps" {
   }
 
   toolshed = {
-    name         = "ca-toolshed-${var.environment}"
-    identity_id  = module.managed_identity.toolshed_id
-    image        = "${module.container_registry.login_server}/mcp-toolshed:latest"
+    name        = "ca-toolshed-${var.environment}"
+    identity_id = module.managed_identity.toolshed_id
+    image       = "${module.container_registry.login_server}/mcp-toolshed:latest"
     # Milestone 18 (ADR-026): the toolshed now scales past one replica — its
     # rate-limit buckets and circuit breaker state live in the shared
     # `GovernanceState` Azure Table, so multiple replicas enforce one view of
@@ -278,14 +278,14 @@ module "container_apps" {
       # table (default table name matches modules/storage/main.tf). Injected as
       # a Container App secret/env var on every app; only the toolshed reads it.
       TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = module.storage.primary_connection_string
-      SLACK_BOT_TOKEN               = var.slack_bot_token
-      SLACK_SIGNING_SECRET          = var.slack_signing_secret
-      MICROSOFT_APP_ID              = var.microsoft_app_id
-      MICROSOFT_APP_PASSWORD        = var.microsoft_app_password
-      GITHUB_TOKEN                  = var.github_token
-      AZURE_DEVOPS_PAT              = var.azure_devops_pat
-      SERVICENOW_API_KEY            = var.servicenow_api_key
-      JIRA_API_TOKEN                = var.jira_api_token
+      SLACK_BOT_TOKEN                             = var.slack_bot_token
+      SLACK_SIGNING_SECRET                        = var.slack_signing_secret
+      MICROSOFT_APP_ID                            = var.microsoft_app_id
+      MICROSOFT_APP_PASSWORD                      = var.microsoft_app_password
+      GITHUB_TOKEN                                = var.github_token
+      AZURE_DEVOPS_PAT                            = var.azure_devops_pat
+      SERVICENOW_API_KEY                          = var.servicenow_api_key
+      JIRA_API_TOKEN                              = var.jira_api_token
     },
     var.model_provider_keys
   )
