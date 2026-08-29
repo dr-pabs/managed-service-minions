@@ -125,3 +125,55 @@ jobs:
       #     curl -X POST -H 'Content-type: application/json' \
       #       --data '{"text":"🚨 Ralph Wiggum says: build is red on ${{ github.ref }} (${{ github.sha }}). Fix, re-run, and get QA approval before merging."}' \
       #       ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Remediation Milestone 11: the contract drift suites (identity vectors,
+  # verification/effects/escalation fixtures) run against the real
+  # forge-contracts repository instead of skipping, and the Azurite-guarded
+  # integration tests (durable idempotency/commit records, shared governance
+  # state, the two-replica breaker) run against a live emulator.
+  contracts-and-azurite:
+    name: Contract drift + Azurite integration
+    runs-on: ubuntu-latest
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite
+        ports:
+          - 10002:10002
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out forge-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: dr-pabs/forge-contracts
+          path: contracts-checkout
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm -r build
+
+      - name: Contract drift suites (identity, verification, effects, escalation)
+        env:
+          FORGE_CONTRACTS_DIR: ${{ github.workspace }}/contracts-checkout
+        run: |
+          pnpm --filter framework-core test -- identity-contract contracts-dir
+          pnpm --filter queue-ingress test -- contracts-drift
+          pnpm --filter mcp-toolshed test -- contracts-drift
+
+      - name: Azurite integration suites
+        env:
+          FORGE_CONTRACTS_DIR: ${{ github.workspace }}/contracts-checkout
+          AZURITE_TABLES_CONNECTION_STRING: UseDevelopmentStorage=true;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
+        run: |
+          pnpm --filter queue-ingress test -- azurite
+          pnpm --filter mcp-toolshed test -- azurite
