@@ -39,6 +39,14 @@ mock_provider "azurerm" {
     }
   }
 
+  override_resource {
+    target = module.managed_identity.azurerm_user_assigned_identity.main["queue_ingress"]
+    values = {
+      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-queue-ingress-goosetest-test"
+      principal_id = "00000000-0000-0000-0000-000000000016"
+    }
+  }
+
   override_data {
     target = module.keyvault.data.azurerm_client_config.current
     values = {
@@ -130,9 +138,9 @@ mock_provider "azurerm" {
   }
 
   override_resource {
-    target = module.service_bus.azurerm_servicebus_topic.minion_tasks
+    target = module.service_bus.azurerm_servicebus_queue.work_items
     values = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.ServiceBus/namespaces/sb-goosetest-test/topics/minion-tasks"
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-goosetest-test/providers/Microsoft.ServiceBus/namespaces/sb-goosetest-test/queues/minion-tasks"
       name = "minion-tasks"
     }
   }

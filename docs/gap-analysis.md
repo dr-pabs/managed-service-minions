@@ -12,7 +12,7 @@
 |---|---|---|
 | **Architecture** | ✅ Complete | `./high-level-design.md`, `./logical-architecture.md` |
 | **Physical architecture** | ✅ Complete | `./physical-architecture.md`, `./azure-architecture.md` |
-| **Decision records** | ✅ 22 ADRs | `adrs.md`, `adrs/adr-001` through `adr-022` |
+| **Decision records** | ✅ 33 ADRs | `adrs/readme.md` (index), `adrs/adr-001` through `adr-033` |
 | **Goose capabilities** | ✅ Complete | `./goose-capabilities-and-usage.md` |
 | **LLM integration** | ✅ Complete | `./how-goose-works-with-llms.md` |
 | **Storage architecture** | ✅ Complete | `./high-level-design.md` §7, ADR-009 |
@@ -31,6 +31,13 @@
 | **Disaster recovery** | ✅ Complete | `./disaster-recovery.md` |
 | **Scale limits** | ⚠️ Documented below | Expand with production data |
 | **Recursive orchestration** | ✅ Decided | Explicit non-goal for v1 |
+| **Identity contract (`identity/v1`)** | ✅ Complete | ADR-029, `packages/framework-core/README.md`, forge-contracts vectors |
+| **Queue-first Stream ingress** | ✅ Complete | ADR-027, `extensions/queue-ingress/README.md`, `./runbooks/stream-operations.md` |
+| **Effect gateway (`effects/v1`)** | ✅ Complete | ADR-028, `extensions/mcp-toolshed/README.md` |
+| **Item pipelines (declarative)** | ✅ Designed + library-complete (production wiring pending) | ADR-030, `recipes/README.md` |
+| **Cost control (`budget/v1`)** | ✅ Complete (daily wired; per-item library-complete, wiring pending) | ADR-031 |
+| **Sampling QA circuit breaker** | ✅ Complete | ADR-032, `./dashboard-design.md` addendum |
+| **Escalation bridge (`escalation/v1`)** | ✅ Complete (emitter library-complete, wiring pending) | ADR-033, `./runbooks/stream-operations.md` |
 
 ---
 
@@ -43,7 +50,7 @@
 | Max concurrent minions per orchestrator replica | Bounded by Goose delegate pool. Estimated 10-20 per replica. |
 | Max sessions per minute | Bounded by intent classifier latency (~500ms). Estimated 30-50/min with 5 orchestrator replicas. |
 | Bottleneck | LLM API rate limits, not compute or storage. |
-| Scaling strategy | The **orchestrator** scales horizontally (more Container Apps replicas, KEDA on Service Bus queue depth, session affinity — ADR-004, ADR-012). The **toolshed, chat bots, and dashboard are pinned to a single replica** (ADR-025): their rate limiter, circuit breaker, and pending-approval reads/writes are process-local state with no cross-replica coordination, so adding replicas to those apps would silently break governance enforcement rather than add capacity. See ADR-025 for the trigger condition to revisit. |
+| Scaling strategy | The **queue-ingress** is the KEDA scale target (1–5 replicas on `minion-tasks` work-queue depth — ADR-027; the scaler moved off the orchestrator at forge-ops Milestone 15). The **orchestrator** runs 1–5 replicas with no scaler of its own (ADR-004, ADR-012 as amended by ADR-027). The **toolshed** also scales now (ADR-026): its rate-limiter buckets and circuit breaker state moved to a shared `GovernanceState` Azure Table, so multiple replicas enforce one view of them; only pending-approval CRUD remains single-writer on SQLite. The **chat bots and dashboard remain pinned to a single replica** (ADR-026): they share the toolshed's mounted SQLite file (session bookkeeping and the single-writer approval path) and hold no rate-limiter/breaker state of their own. See ADR-025 (superseded) and ADR-026 for the residual-limitation trigger condition. |
 
 The throughput ceiling should be validated with load testing in staging. See `./testing-strategy.md` §Performance Tests.
 
@@ -62,18 +69,22 @@ All current numbers (cost estimates, throughput ceilings, RTO/RPO targets) are c
 ```
 .
 ├── docs/
-│   ├── high-level-design.md              (1,434 lines)  Architecture narrative
-│   ├── logical-architecture.md            (986 lines)   12 Mermaid diagrams
-│   ├── physical-architecture.md           (541 lines)   7 Mermaid diagrams
-│   ├── azure-architecture.md              (834 lines)   9 Mermaid diagrams
-│   ├── gap-analysis.md                    (137 lines)   This document
-│   ├── dashboard-design.md                (380 lines)   6 view wireframes
-│   ├── goose-changes-required.md          (132 lines)   Capability audit
-│   ├── goose-capabilities-and-usage.md    (235 lines)   Goose boundary analysis
-│   ├── how-goose-works-with-llms.md       (759 lines)   LLM integration + tiers
-│   ├── error-handling.md                  (523 lines)   12 failure scenarios
-│   ├── testing-strategy.md                (484 lines)   9 testing layers
-│   └── disaster-recovery.md               (175 lines)   4 failure scenarios
+│   ├── high-level-design.md               Architecture narrative
+│   ├── logical-architecture.md            Mermaid diagrams (logical views)
+│   ├── physical-architecture.md           Mermaid diagrams (physical views)
+│   ├── azure-architecture.md              Mermaid diagrams (Azure views)
+│   ├── low-level-design.md                Goose primitives + framework additions
+│   ├── gap-analysis.md                    This document
+│   ├── dashboard-design.md                View wireframes + as-built addendum
+│   ├── goose-changes-required.md          Capability audit
+│   ├── goose-capabilities-and-usage.md    Goose boundary analysis
+│   ├── how-goose-works-with-llms.md       LLM integration + tiers
+│   ├── error-handling.md                  Failure scenarios + DLQ triage
+│   ├── testing-strategy.md                Testing layers (incl. soak + contract conformance)
+│   ├── disaster-recovery.md               Failure scenarios
+│   └── runbooks/                          DR, production handoff, security review, stream operations
 ├── adrs/
-    ├── adr-001 through adr-022        (22 files)
+    ├── readme.md (index) + adr-001 through adr-033   (34 files)
 ```
+
+(Line counts removed — they drifted with every edit; the inventory lists what exists, `wc -l` answers how big.)

@@ -208,7 +208,7 @@ graph TB
 
 This is the **internal component diagram of the Orchestrator**. It shows how a user request is transformed into minion work and a response.
 
-**Ingress** receives the raw message + metadata from the Slack or Teams bot adapter.
+**Ingress** receives the raw message + metadata from the Slack or Teams bot adapter. As built, two additional ingress paths drive the same orchestrator runner through the identical `IngressRequest`/`IngressRunner` contract: the webhook ingress (`extensions/webhook-ingress`, GitHub/ADO events) and the work-item queue ingress (`extensions/queue-ingress`, Service Bus `minion-tasks` envelopes, ADR-027).
 
 The **Intent Pipeline** classifies the request:
 - **Intent Classifier** uses the `fast` tier LLM to determine the intent (`ticket_lookup`, `code_review`, `pr_create`, `ticket→fix→pr`) and whether the task is simple (sync) or complex (async). It also detects the target platform (GitHub vs. Azure DevOps) from context clues.
@@ -378,7 +378,7 @@ This **state diagram** shows every state a minion can be in, and the transitions
 - **Timed Out**: The minion exceeded its configured `timeout_secs` or `max_turns`. Same retry logic applies.
 - **DeadLettered**: After exhausting retries, the task moves to the Service Bus DLQ. An operator can inspect it via the dashboard (using the correlation ID) and replay or discard.
 
-The state machine is the same for all five minion types. What differs per type is the timeout, max turns, tool allowlist, and system prompt — all defined in the orchestrator extension manifest.
+The state machine is the same for all seven minion types. What differs per type is the timeout, max turns, tool allowlist, and system prompt — all defined in the orchestrator extension manifest.
 
 ---
 
@@ -863,12 +863,12 @@ graph TB
 This **deployment diagram** maps every logical component to its Azure resource. It shows what runs where, what talks to what, and — critically — what crosses the VNet boundary.
 
 **Inside the VNet (private subnet):**
-- **Container Apps** host the four Goose extensions: Orchestrator (2-5 replicas, autoscaled by KEDA on Service Bus queue depth), Slack Bot (1 replica), Teams Bot (1 replica), and MCP Sidecars (filesystem, git, shell — stdio-based MCP servers that must colocate with the orchestrator).
+- **Container Apps** host six deployed apps: Orchestrator (1–5 replicas, no scaler of its own), Queue-Ingress (1–5 replicas, autoscaled by KEDA on the `minion-tasks` work-queue depth — the scale target since ADR-027), Toolshed (1–5 replicas on shared governance state, ADR-026), Dashboard (1 replica, pinned), Slack Bot (1 replica), and Teams Bot (1 replica) — plus MCP Sidecars (filesystem, git, shell — stdio-based MCP servers that must colocate with the orchestrator).
 - **Private Endpoints** connect Container Apps to Azure managed services without traversing the public internet. Service Bus, Table Storage, Blob Storage, Key Vault, and AI Foundry are all reached via private IP. This is the default Azure landing-zone pattern.
 
 **Outside the VNet:**
 - **Managed services** are provisioned but accessed through private endpoints. They are in the same Azure subscription but logically outside the VNet boundary in Mermaid's notation.
-- **Public ingress** is limited to Slack API and Teams API. These are the only public-facing endpoints. The bots listen for inbound webhooks.
+- **Public ingress** comprises the Slack API and Teams API endpoints the bots listen on, plus — once the webhook-ingress app is deployed (image built, Terraform app pending) — the GitHub/ADO webhook endpoints (`/webhooks/github`, `/webhooks/ado`), each verified before the body is read.
 - **External MCP servers** (GitHub, Azure DevOps, ServiceNow, Jira) are reached via SSE over HTTPS. They run in third-party clouds or on-premises.
 
 **Managed Identity** is the authentication backbone. The orchestrator authenticates to Key Vault, Service Bus, Storage, and AI Foundry using its Azure Container Apps managed identity — no static keys in environment variables or config files. MCP server credentials (GitHub PAT, ADO PAT, ServiceNow credentials) are fetched from Key Vault at startup and held in memory only.

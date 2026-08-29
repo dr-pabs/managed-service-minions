@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.forge.dev/schemas/verification/v1/schema.json",
+  "title": "Verification result",
+  "description": "The language-neutral result of one verification check — the contract behind Flow's verifier plugin layer and Stream's per-item verification chain.",
+  "type": "object",
+  "properties": {
+    "passed": { "type": "boolean" },
+    "verifier": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "message": { "type": "string" },
+          "severity": { "type": "string", "enum": ["error", "warning", "info"] },
+          "location": { "type": "string" }
+        },
+        "required": ["id", "message", "severity"],
+        "additionalProperties": false
+      }
+    },
+    "metrics": { "type": "object", "additionalProperties": { "type": "number" } },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "evidence_ref": { "type": "string" }
+  },
+  "required": ["passed", "verifier", "findings", "metrics", "cost_usd"],
+  "additionalProperties": false
+}

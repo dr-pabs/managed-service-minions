@@ -251,7 +251,7 @@ describe('e2e: "@minions review PR #1" (Milestone 11, M5/F8)', () => {
     });
 
     const forgedToken = mintMinionToken(
-      { minionType: 'code_explorer', sessionId: 'sess_forged', correlationId: 'corr_forged.0' },
+      { agent_id: 'code_explorer', scope_id: 'sess_forged', correlation_id: 'corr_forged.0' },
       'attacker-controlled-secret'
     );
 

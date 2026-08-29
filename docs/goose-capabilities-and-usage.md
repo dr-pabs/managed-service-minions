@@ -173,6 +173,34 @@ These capabilities do not exist in Goose and must be built entirely by the frame
 
 ---
 
+## Forge Ops (Stream) Capabilities
+
+Beyond the Goose-boundary gaps above, Minions carries a **Forge Ops (Stream)**
+distribution — the high-volume customer-workflow half of a two-runtime design
+(**Flow** lives in the Forge repository), joined by versioned contracts in the
+[`forge-contracts`](https://github.com/dr-pabs/forge-contracts) repository.
+Each capability below ships with a backing test suite; the table is the Stream
+counterpart to Forge's `capabilities.yaml` (which names each Flow capability's
+backing test the same way).
+
+| Capability | What it does | Backing tests |
+|---|---|---|
+| **Identity tokens** (`identity/v1`) | Agent identity tokens minted/verified with the contract claim set; no self-reported identity | `packages/framework-core/src/__tests__/identity-contract.test.ts`, `minion-token.test.ts` |
+| **Effect gateway** (`effects/v1`) | Agents draft side effects; only the gateway commits them, gated on verification evidence + approval class; irreversible effects refuse agent actors | `extensions/mcp-toolshed/src/__tests__/effect-gateway.test.ts` |
+| **Work-item queue ingress** | Typed `WorkItem` envelopes consumed from Service Bus with idempotent redelivery and reason-coded dead-lettering | `extensions/queue-ingress/__tests__/*.test.ts` |
+| **Item pipelines** | Declarative classify→act→verify→commit/escalate chains with per-item verification | `extensions/queue-ingress/__tests__/item-pipeline.test.ts`, `test/src/e2e-item-pipeline.test.ts` |
+| **Cost control** (`budget/v1`) | Hard per-item `max_cost_usd` (item halts, never the queue) and a per-UTC-day budget that pauses consumption | `extensions/queue-ingress/__tests__/cost-control.test.ts` |
+| **Multi-replica governance state** | Rate-limit and breaker state shared across replicas (ADR-026 supersedes ADR-025) | `extensions/mcp-toolshed/src/__tests__/shared-governance-state.test.ts` |
+| **Sampling QA loop** | Post-hoc human review of auto-commits turns a disagreement rate into an auto-commit circuit breaker per effect type | `extensions/mcp-toolshed/src/__tests__/sampling-qa.test.ts` |
+| **Escalation bridge** (`escalation/v1`) | A failing item escalates into a signed envelope, runs in Flow, and closes on a signed resolution under one correlation id | `extensions/queue-ingress/__tests__/escalation.test.ts`, `test/src/bridge-e2e.test.ts` |
+| **1000-item soak** | At-most-once commits and complete dead-letter accounting over a seeded duplicate/poison run | `extensions/queue-ingress/soak/soak.test.ts` (`pnpm --filter ./extensions/queue-ingress test:soak`) |
+
+The full design and milestone history live in
+[`forge-ops.execplan.md`](https://github.com/dr-pabs/forge-contracts/blob/main/forge-ops.execplan.md)
+in the contracts repository.
+
+---
+
 ## Summary Matrix
 
 | Category | What Goose Provides | What We Add | What We Don't Use |
@@ -183,7 +211,10 @@ These capabilities do not exist in Goose and must be built entirely by the frame
 | **AI inference** | LLM conversation loop | Model routing by configurable tier (fast, reasoning, code_review, code_generation, security) | — |
 | **Memory** | `chatrecall` (conversation search) | Correlation ID propagation, session SQLite store | `memory` (preference learning) |
 | **Scheduling** | `platform__manage_schedule` (cron) | Recipe definitions (daily PR review, ticket polling, security scans) | — |
-| **Chat ingress** | — | Slack Bolt + Microsoft 365 Agent SDK adapters | — |
+| **Chat ingress** | — | Slack Bolt + Microsoft 365 Agent SDK adapters; webhook ingress (GitHub/ADO events) | — |
+| **Queue ingress (Stream)** | — | `queue-ingress`: single Service Bus work queue, consumer-side idempotency, reason-coded DLQ, KEDA scale target (ADR-027) | — |
+| **Effect gateway** | — | In-process `effect_gateway` in the toolshed: draft/commit/discard with evidence gate + approval classes (ADR-028) | — |
+| **Cost control** | — | `budget/v1` enforcement: per-item cap halts the item (`BUDGET_EXCEEDED`), daily cap pauses the queue (ADR-031) | — |
 | **Observability** | — | MCP proxy logging, Table Storage, Log Analytics, Grafana, custom dashboard | `autovisualiser` |
 | **Security** | — | Tool allowlisting, rate limiting, human-in-the-loop, content safety (AI Foundry), managed identity, private endpoints | — |
 | **Config & prompts** | Extension manifests (YAML) | Git-versioned prompts, governance configs, CI/CD deployment | Resources system, `load_skill` |
@@ -220,13 +251,17 @@ These capabilities do not exist in Goose and must be built entirely by the frame
 │              MINIONS AGENT FRAMEWORK                     │
 │                                                          │
 │  🏗️  orchestrator (intent, DAG, lifecycle, gating)       │
-│  🏗️  mcp-toolshed (allowlists, rate limiting, logging)   │
+│  🏗️  mcp-toolshed (allowlists, rate limiting, logging,   │
+│      effect gateway + sampling QA — ADR-028/032)         │
 │  🏗️  slack-bot (Slack ingress/egress)                    │
 │  🏗️  teams-bot (Teams ingress/egress)                    │
+│  🏗️  webhook-ingress (GitHub/ADO event ingress)          │
+│  🏗️  queue-ingress (Service Bus work items, ADR-027)     │
 │  🏗️  agent-dashboard (session replay, correlation tree)  │
-│  🏗️  Minion prompts (5 specialized system prompts)       │
+│  🏗️  Minion prompts (7 specialized system prompts)       │
 │  🏗️  SQLite session store + schema                       │
-│  🏗️  Azure Table + Blob + Service Bus + Grafana          │
+│  🏗️  Azure Table (ToolCallLog + shared GovernanceState,  │
+│      ADR-026) + Blob + Service Bus + Grafana             │
 │  🏗️  Correlation ID propagation                          │
 │  🏗️  Governance config + CI/CD                           │
 └─────────────────────────────────────────────────────────┘

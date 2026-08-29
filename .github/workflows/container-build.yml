@@ -54,6 +54,8 @@ jobs:
             dockerfile: extensions/agent-dashboard/Dockerfile
           - name: webhook-ingress
             dockerfile: extensions/webhook-ingress/Dockerfile
+          - name: queue-ingress
+            dockerfile: extensions/queue-ingress/Dockerfile
 
     env:
       IMAGE_REF: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ github.sha }}

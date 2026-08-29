@@ -2,11 +2,11 @@
 
 | Key | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Accepted (amended by ADR-027) |
 | **Date** | 2026-06-05 |
 | **Deciders** | Goose Agent Framework team |
 | **Replaces** | — |
-| **Superseded by** | — |
+| **Superseded by** | — (queue topology amended by ADR-027: single work queue, consumer-side idempotency, KEDA on the queue-ingress) |
 
 ---
 

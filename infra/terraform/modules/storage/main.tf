@@ -20,6 +20,14 @@ resource "azurerm_storage_table" "tool_call_log" {
   storage_account_name = azurerm_storage_account.main.name
 }
 
+# Milestone 18 (ADR-026): shared rate-limit buckets and circuit breaker state
+# for the (now multi-replica) toolshed. The table name matches the default of
+# the toolshed's TOOLSHED_GOVERNANCE_STATE_TABLE env var.
+resource "azurerm_storage_table" "governance_state" {
+  name                 = "GovernanceState"
+  storage_account_name = azurerm_storage_account.main.name
+}
+
 resource "azurerm_storage_container" "minion_outputs" {
   name                  = "minion-outputs"
   storage_account_name  = azurerm_storage_account.main.name

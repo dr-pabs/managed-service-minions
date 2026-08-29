@@ -19,16 +19,10 @@ variable "sku" {
   default     = "Standard"
 }
 
-variable "topic_name" {
-  description = "Name of the Service Bus topic."
+variable "queue_name" {
+  description = "Name of the work-item queue consumed by the queue-ingress (Milestone 15 of the forge-ops execplan, forge-contracts repo)."
   type        = string
   default     = "minion-tasks"
-}
-
-variable "subscriptions" {
-  description = "List of subscription names."
-  type        = list(string)
-  default     = ["code-explorer", "code-reviewer", "pr-crafter", "ticket-analyst", "security-auditor"]
 }
 
 variable "role_assignments" {

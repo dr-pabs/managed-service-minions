@@ -89,6 +89,7 @@ main{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 56px
       <button class="tab" onclick="showTab('tree')">Correlation Tree</button>
       <button class="tab" onclick="showTab('audit')">Audit Search</button>
       <button class="tab" onclick="showTab('cost')">Cost</button>
+      <button class="tab" onclick="showTab('qa')">Sampling QA</button>
     </div>
     <div id="tabRuns">
       <div class="panel">
@@ -124,6 +125,12 @@ main{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 56px
         <div id="costPanel"><div class="empty">Select a session to view cost.</div></div>
       </div>
     </div>
+    <div id="tabQa" style="display:none">
+      <div class="panel">
+        <h2>Sampling QA &mdash; disagreement rate</h2>
+        <div id="qaList"><div class="empty">Loading...</div></div>
+      </div>
+    </div>
   </div>
 </main>
 <script>
@@ -149,12 +156,14 @@ function showTab(tab) {
   document.getElementById('tabTree').style.display = tab === 'tree' ? '' : 'none';
   document.getElementById('tabAudit').style.display = tab === 'audit' ? '' : 'none';
   document.getElementById('tabCost').style.display = tab === 'cost' ? '' : 'none';
+  document.getElementById('tabQa').style.display = tab === 'qa' ? '' : 'none';
   document.querySelectorAll('.tab').forEach(function(el) {
     el.classList.toggle('active', el.textContent.toLowerCase().replace(/ /g, '') === tab.replace(/ /g, ''));
   });
   if (tab === 'approvals') loadApprovals();
   if (tab === 'tree' && selectedCorrRoot) loadTree(selectedCorrRoot);
   if (tab === 'cost' && selectedSessionId) loadCost(selectedSessionId);
+  if (tab === 'qa') loadQa();
 }
 
 function badge(status) {
@@ -278,6 +287,30 @@ function loadCost(sessionId) {
     }).catch(function() {});
 }
 
+function loadQa() {
+  authFetch('/api/sampling-qa').then(function(r) { return r.json(); }).then(function(stats) {
+    var el = document.getElementById('qaList');
+    if (!stats.length) { el.innerHTML = '<div class="empty">No sampling QA configured.</div>'; return; }
+    el.innerHTML = stats.map(function(s) {
+      var badge = s.tripped ? '<span class="badge badge-failed">TRIPPED</span>' : '<span class="badge badge-completed">OK</span>';
+      var rate = (s.disagreementRate * 100).toFixed(1) + '%';
+      var reset = s.tripped
+        ? '<button class="btn btn-deny" onclick="resetQa(\\'' + escape(s.effectType) + '\\',this)">Reset</button>'
+        : '';
+      return '<div class="run-item"><div class="run-header"><span class="run-type">' + escape(s.effectType) + '</span>' + badge + '</div>' +
+        '<div class="session-meta">Reviewed: ' + s.reviewed + ' &bull; Disagreed: ' + s.disagreed + ' &bull; Disagreement rate: ' + rate + '</div>' +
+        (reset ? '<div style="margin-top:.5rem">' + reset + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }).catch(function() {});
+}
+
+function resetQa(effectType, btn) {
+  btn.disabled = true;
+  authFetch('/api/sampling-qa/' + encodeURIComponent(effectType) + '/reset', { method: 'POST' })
+    .then(function() { loadQa(); }).catch(function() { loadQa(); });
+}
+
 function checkHealth() {
   authFetch('/health').then(function(r) {
     document.getElementById('healthDot').style.background = r.ok ? '#22c55e' : '#ef4444';
@@ -293,6 +326,7 @@ function refresh() {
   if (activeTab === 'runs' && selectedSessionId) loadRuns(selectedSessionId);
   if (activeTab === 'tree' && selectedCorrRoot) loadTree(selectedCorrRoot);
   if (activeTab === 'cost' && selectedSessionId) loadCost(selectedSessionId);
+  if (activeTab === 'qa') loadQa();
   document.getElementById('lastRefresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
 }
 
@@ -543,6 +577,40 @@ function buildAuditRoute(store: SessionStore): Route {
   };
 }
 
+/**
+ * `GET /api/sampling-qa` and `POST /api/sampling-qa/:effectType/reset`
+ * (Milestone 19). The stats provider and reset callback are injected so the
+ * dashboard stays decoupled from the toolshed's `SamplingQa` store — the
+ * disagreement rate (and the breaker's tripped state) surface here, and the
+ * "until reset" action is the POST. A reset endpoint with no provider 404s,
+ * rather than pretending to reset something that is not wired up.
+ */
+function buildSamplingQaRoute(
+  samplingQaStats: (() => SamplingQaStat[]) | undefined,
+  resetSamplingQa: ((effectType: string) => void) | undefined
+): Route[] {
+  return [
+    {
+      method: 'GET',
+      pattern: /^\/api\/sampling-qa$/,
+      handler: async (_req, res) => {
+        jsonResponse(res, 200, samplingQaStats ? samplingQaStats() : []);
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/api\/sampling-qa\/([^/]+)\/reset$/,
+      handler: async (_req, res, matches) => {
+        if (!resetSamplingQa) {
+          return notFound(res);
+        }
+        resetSamplingQa(decodeURIComponent(matches[1]));
+        jsonResponse(res, 200, { reset: decodeURIComponent(matches[1]) });
+      },
+    },
+  ];
+}
+
 /** A single item pushed over `GET /api/events`. */
 interface DashboardEvent {
   type: 'run' | 'approval' | 'audit';
@@ -671,6 +739,20 @@ function buildCostRoute(store: SessionStore, repoRoot: string): Route {
 }
 
 /**
+ * The per-type sampling-QA view (Milestone 19) the dashboard renders. Defined
+ * locally (not imported from `mcp-toolshed`) so the dashboard stays decoupled
+ * from the toolshed's exact stat shape — the injected provider just returns
+ * objects of this shape.
+ */
+export interface SamplingQaStat {
+  effectType: string;
+  reviewed: number;
+  disagreed: number;
+  disagreementRate: number;
+  tripped: boolean;
+}
+
+/**
  * Milestone 14 options, all optional so every pre-Milestone-14 call site
  * (tests included) keeps compiling and behaving exactly as before.
  */
@@ -703,6 +785,15 @@ export interface DashboardServerOptions {
   /** Injectable timer functions so SSE tests never wait on a real interval. */
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
+  /**
+   * Post-hoc sampling-QA disagreement-rate stats (Milestone 19), injected by
+   * the caller (in production, wired to the toolshed's `SamplingQa` store).
+   * Returns the per-type stats `GET /api/sampling-qa` serves; `undefined` (the
+   * default) serves an empty list.
+   */
+  samplingQaStats?: () => SamplingQaStat[];
+  /** Resets one type's sampling-QA breaker (Milestone 19); absent means the reset endpoint 404s. */
+  resetSamplingQa?: (effectType: string) => void;
 }
 
 export async function startDashboardServer(
@@ -782,6 +873,7 @@ export async function startDashboardServer(
     buildCostRoute(store, repoRoot),
     ...buildApprovalRoutes(options.operatorUrl, options.operatorToken, fetchImpl),
     buildAuditRoute(store),
+    ...buildSamplingQaRoute(options.samplingQaStats, options.resetSamplingQa),
     buildEventsRoute(store, pollIntervalMs, setIntervalFn, clearIntervalFn),
     {
       // Internal operator endpoint — do not expose the dashboard port to untrusted networks.

@@ -460,6 +460,18 @@ Session: corr_a1b2c3 — [View Details]"
 | Service Bus unavailable | Local queue + retry | ∞ | 5s → 30s → 60s |
 | Allowlist block | No retry | — | Escalate immediately |
 
+### DLQ Reason-Code Triage (Stream work items)
+
+Work items dead-lettered by the queue-ingress carry a machine-readable reason
+code (ADR-027/031); triage by code before touching the message (full
+procedures: `./runbooks/stream-operations.md`):
+
+| Reason code | Meaning | First response |
+|---|---|---|
+| `MALFORMED_ENVELOPE` | body failed `parseWorkItem` (bad shape / missing required field); no effect attempted | Fix the producer; re-enqueue a corrected envelope (same `idempotency_key` is safe) — never replay as-is |
+| `POISON_MESSAGE` | well-formed item failed until delivery count hit the poison threshold (3) | Read the audit trail by correlation id, fix the cause, then re-enqueue (idempotency store makes replay safe) |
+| `BUDGET_EXCEEDED` | item's model spend reached its recipe `max_cost_usd` cap (budget/v1 `policy: "halt"`); the item halted, the queue kept flowing | Decide: discard as pathological, or raise the item type's cap in `recipes/item-pipelines.yaml` and re-enqueue |
+
 ### Escalation Path
 
 ```
@@ -467,6 +479,7 @@ Minion fails after max retries
         │
         ▼
 Service Bus Dead-Letter Queue
+   (reason-coded — see triage table above)
         │
         ▼
 Grafana alert: "DLQ has messages" (Sev-2)
@@ -478,6 +491,15 @@ Operator inspects via dashboard (correlation ID)
         ├── Modify: adjust params and re-enqueue
         └── Discard: acknowledge and close
 ```
+
+**Escalation bridge (Stream → Flow, ADR-033):** for item types configured
+with `on_failure: escalate`, an item exceeding its retry/cost/complexity
+thresholds does not simply dead-letter — the pipeline assembles a signed
+`escalation/v1` envelope (item + full attempt history + cause) and delivers
+it to the Forge (Flow) intake, closing the item only on Flow's signed
+resolution under the same correlation id. (Emitter is library-complete;
+production wiring pending — ADR-030/033.) Stuck-envelope reconciliation:
+`./runbooks/stream-operations.md` §4.
 
 ---
 

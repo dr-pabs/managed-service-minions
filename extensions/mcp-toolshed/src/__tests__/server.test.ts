@@ -250,7 +250,7 @@ describe('server', () => {
       const { operatorHttp } = await startToolshedServer(0);
       await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
-      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, SECRET);
+      const token = mintMinionToken({ agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' }, SECRET);
       const response = await callToolHandler?.({
         params: {
           arguments: {
@@ -301,7 +301,7 @@ describe('server', () => {
       const { operatorHttp } = await startToolshedServer(0);
       await operatorHttp.close();
       const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (req: unknown) => Promise<{ content: Array<{ text: string }> }>;
-      const token = mintMinionToken({ minionType: 'code_explorer', sessionId: 'sess_1', correlationId: 'corr_1' }, 'wrong-secret');
+      const token = mintMinionToken({ agent_id: 'code_explorer', scope_id: 'sess_1', correlation_id: 'corr_1' }, 'wrong-secret');
       const response = await callToolHandler?.({
         params: {
           arguments: {

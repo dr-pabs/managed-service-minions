@@ -172,6 +172,18 @@ The Minions Agent Framework extends the core Goose platform into a **multi-agent
   - `*/30 * * * *` — Poll ServiceNow for new critical incidents
   - `0 7 * * 1` — Weekly codebase health report (security scan + dependency audit)
 
+### Webhook Ingress (as built)
+
+- **Type:** standalone service (`extensions/webhook-ingress`)
+- **Mechanism:** `POST /webhooks/github` (HMAC-verified) and `POST /webhooks/ado` (basic-auth-verified) map events onto the same `IngressRequest`/`IngressRunner` contract chat uses and drive the orchestrator runner; replies post back through the governed toolshed
+- **Status:** container image built by CI; not yet deployed by Terraform (known gap — see `extensions/webhook-ingress/README.md`)
+
+### Work-Item Queue Ingress (as built)
+
+- **Type:** standalone service (`extensions/queue-ingress`), the Forge Ops Stream entry point (ADR-027)
+- **Mechanism:** consumes typed `WorkItem` envelopes (`item_type`, `payload`, `idempotency_key`, `correlation_id`) from the single Service Bus queue `minion-tasks` and drives the same orchestrator runner; consumer-side idempotency, reason-coded dead-lettering (`MALFORMED_ENVELOPE`/`POISON_MESSAGE`/`BUDGET_EXCEEDED`), daily-budget pause (ADR-031)
+- **Scaling:** the KEDA queue-depth scale target (1–5 replicas)
+
 ---
 
 ## Layer 2: Orchestrator
@@ -513,10 +525,10 @@ Plus Azure Monitor / Log Analytics for search, dashboards, and alerting:
 |---|---|
 | **Purpose** | Hot session state — active conversations, in-flight minions, pending approvals |
 | **Location** | Local to the toolshed container, on a mounted Azure Files share (`extensions/mcp-toolshed/src/store.ts`); the orchestrator's own conversation/session bookkeeping is a separate concern from the toolshed's governance state |
-| **Schema** | Sessions, minion_runs, pending_approvals; rate limiter and circuit breaker state are in-process (`Map`-backed, not persisted to SQLite — see `rate-limiter.ts`/`circuit-breaker.ts`) |
+| **Schema** | Sessions, minion_runs, pending_approvals. Rate-limiter and circuit-breaker state are no longer in process memory — they live in a shared `GovernanceState` Azure Table (ADR-026, `shared-governance-state.ts`); only pending approvals remain on SQLite. |
 | **Backup** | Periodic WAL snapshots to Azure Blob (cool tier) |
 | **Cost** | $0 (embedded, no Azure resource) |
-| **Limitation** | **Not shared across replicas, and the toolshed/bots/dashboard are pinned to a single replica because of it (ADR-025)** — pending approvals, the rate limiter's token buckets, and circuit breaker state are process-local with no cross-replica coordination, so unlike the orchestrator (which scales via Service Bus session affinity, ADR-004/ADR-012) there is no session-affinity trick that makes multiple toolshed replicas safe. See ADR-025 for the trigger condition and the deferred Redis/Table-Storage-lease alternatives. |
+| **Limitation** | **Pending approvals are not shared across replicas — they remain single-writer on SQLite (ADR-026).** The rate limiter's token buckets and circuit breaker state moved to a shared `GovernanceState` Azure Table (ADR-026), so the toolshed itself scales; only the chat bots and dashboard stay pinned to a single replica because they share this SQLite file and hold no rate-limiter/breaker state of their own. Unlike the orchestrator (which scales via Service Bus session affinity, ADR-004/ADR-012) there is no session-affinity trick for the approval path — it is the one residual single-writer concern, and the trigger condition to revisit is in ADR-026. |
 
 ### Azure Table Storage — Tool Call Log
 
@@ -730,11 +742,11 @@ The framework runs on **Azure AI Foundry** for AI inference and **Azure Containe
 │  │         └─────────────────┼─────────────────┘                    │  │
 │  │                           │                                      │  │
 │  │  ┌────────────────────────┴────────────────────────┐           │  │
-│  │  │  Azure Service Bus                               │           │  │
-│  │  │  • Topic: minion-tasks (async task queue)        │           │  │
-│  │  │  • Subscription per minion type                  │           │  │
-│  │  │  • Sessions enabled (ordered delivery per corr.) │           │  │
-│  │  │  • Dead-letter on failure                        │           │  │
+│  │  │  Azure Service Bus (ADR-027)                     │           │  │
+│  │  │  • Single queue: minion-tasks (work items)       │           │  │
+│  │  │  • Consumed by queue-ingress (KEDA target)       │           │  │
+│  │  │  • Consumer-side idempotency store               │           │  │
+│  │  │  • Dead-letter with reason codes                 │           │  │
 │  │  └─────────────────────────────────────────────────┘           │  │
 │  │                                                                  │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │  │
@@ -781,7 +793,7 @@ The framework runs on **Azure AI Foundry** for AI inference and **Azure Containe
 
 | Trigger | Scaling Action |
 |---|---|
-| Service Bus queue depth > N messages | KEDA scales container count up (max 10) |
+| Service Bus queue depth > N messages | KEDA scales the **queue-ingress** container count up (max 5, per `infra/terraform`; ADR-027) |
 | Queue depth = 0 for T minutes | Scale to zero (or floor of 1 for latency-sensitive) |
 | Minion timeout spike | Prometheus alert → ops investigate |
 | Rate limit near exhaustion (GitHub/ADO) | Backpressure: orchestrator throttles dispatch |

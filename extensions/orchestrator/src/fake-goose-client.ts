@@ -117,7 +117,7 @@ export function createFakeGooseClient(config: FakeGooseClientConfig): FakeGooseC
       // test scripts a toolCall on the "orchestrator" entry (uncommon, but
       // not disallowed).
       const token = mintMinionToken(
-        { minionType: 'orchestrator', sessionId: args.sessionId, correlationId: args.correlationId },
+        { agent_id: 'orchestrator', scope_id: args.sessionId, correlation_id: args.correlationId },
         config.secret
       );
       return handle('orchestrator', args.correlationId, token, turn);

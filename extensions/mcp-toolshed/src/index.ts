@@ -64,6 +64,10 @@ export {
   type RetryingAuditLogger,
   type RetryingAuditLoggerOptions,
 } from './cloud-audit.js';
+export {
+  createSharedGovernanceStateStore,
+  type SharedGovernanceStateStoreOptions,
+} from './shared-governance-state.js';
 export { redactSecrets, redactValue } from './redact.js';
 export {
   FileSystemArtifactStore,
@@ -77,3 +81,62 @@ export {
   type WatchRulesOptions,
   type WatchRulesHandle,
 } from './hot-reload.js';
+export {
+  createMemoryEffectStore,
+  createSqliteEffectStore,
+  newDraftId,
+  draftRef,
+  parseDraftRef,
+  toDraftDocument,
+  toDecisionRecord,
+  toAuditView,
+  type EffectActor,
+  type EffectDraftDocument,
+  type DecisionRecord,
+  type EffectDraftRecord,
+  type EffectStatus,
+  type EffectDraftStore,
+  type DecisionWrite,
+} from './effect-store.js';
+export {
+  EffectGateway,
+  EffectCredentials,
+  RecordingConnector,
+  MapVerificationResolver,
+  makeEffectTypePolicy,
+  requiresHumanActor,
+  effectTypesFromRecord,
+  ensureEffectGatewayRules,
+  SERVER_ALIAS as EFFECT_GATEWAY_ALIAS,
+  DRAFT_EFFECT,
+  COMMIT_EFFECT,
+  DISCARD_EFFECT,
+  REVIEW_COMMIT,
+  GATEWAY_TOOLS,
+  REVERSIBILITY_CLASSES,
+  APPROVAL_CLASSES,
+  type EffectConnector,
+  type EffectTypePolicy,
+  type EffectCaller,
+  type GatewayApprovalStore,
+  type VerificationView,
+  type VerificationResolver,
+  type ApprovalEvidenceView,
+  type EffectAuditEvent,
+  type EffectGatewayOptions,
+  type DraftEffectResult,
+  type CommitEffectResult,
+  type DiscardEffectResult,
+} from './effect-gateway.js';
+export {
+  SamplingQa,
+  createMemorySamplingQaStore,
+  createSqliteSamplingQaStore,
+  makeSamplingQaPolicy,
+  samplingQaPoliciesFromRecord,
+  type ReviewDecision,
+  type SamplingQaPolicy,
+  type PostHocReviewVerdict,
+  type SamplingQaStat,
+  type SamplingQaStore,
+} from './sampling-qa.js';

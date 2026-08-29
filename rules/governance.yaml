@@ -1,4 +1,13 @@
 governance:
+  # NOTE: this list is intentionally incomplete. The effect gateway's
+  # `effect_gateway.commit_effect` is injected as a destructive action at
+  # runtime by ensureEffectGatewayRules() (extensions/mcp-toolshed/src/
+  # effect-gateway.ts, ADR-028) whenever the gateway is wired into a
+  # toolshed, so a commit surfaces a human-visible approval even under an
+  # empty or stale copy of this file — the invariant lives in code and is
+  # only mirrored here in comment form. Do not add a commit_effect row
+  # below; the runtime injection is idempotent and authoritative
+  # (discard_effect is deliberately NOT destructive).
   destructive_actions:
     - server_alias: github
       tool_name: github_merge_pull_request
@@ -11,6 +20,11 @@ governance:
 
   approval_timeout_minutes: 15
 
+  # There is deliberately no `effect_gateway` entry here or under
+  # cache_policy: the gateway is in-process (no network to throttle, no
+  # breaker to trip) and its results must never be cached (a commit is a
+  # decision record, not a read). The `default` bucket still applies to its
+  # tool calls like any other.
   rate_limits:
     default:
       requests_per_minute: 60

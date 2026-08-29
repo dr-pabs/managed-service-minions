@@ -168,8 +168,8 @@ describe('createOrchestratorRunner: minion tokens (Milestone 3 integration)', ()
     expect(new Set(tokens).size).toBe(2);
     const payloads = tokens.map((t) => verifyMinionToken(t, SECRET));
     expect(payloads.every((p) => p.ok)).toBe(true);
-    expect((payloads[0] as { ok: true; payload: { minionType: string } }).payload.minionType).toBe('code_explorer');
-    expect((payloads[1] as { ok: true; payload: { minionType: string } }).payload.minionType).toBe('code_reviewer');
+    expect((payloads[0] as { ok: true; payload: { agent_id: string } }).payload.agent_id).toBe('code_explorer');
+    expect((payloads[1] as { ok: true; payload: { agent_id: string } }).payload.agent_id).toBe('code_reviewer');
   });
 });
 

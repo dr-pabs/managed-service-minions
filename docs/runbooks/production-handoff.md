@@ -62,6 +62,7 @@
 - **L2 support:** Platform on-call — handles scaling, stuck approvals, DLQ replay.
 - **L3 support:** Engineering team — code bugs, prompt tuning, governance changes.
 - **Escalation:** Page on-call if orchestrator is scaled to zero for > 5 minutes or tool-call failure rate > 10%.
+- **Stream operations:** DLQ triage by reason code (`MALFORMED_ENVELOPE` / `POISON_MESSAGE` / `BUDGET_EXCEEDED`), sampling-QA breaker resets, daily-budget queue pauses, and escalation-bridge reconciliation are covered in [`stream-operations.md`](./stream-operations.md).
 
 ---
 

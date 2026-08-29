@@ -1,8 +1,8 @@
 # Dashboard Design — Agent Dashboard Extension (Phase 4)
 
 > **Date:** 2026-06-06  
-> **Status:** Draft  
-> **Complements:** ADR-018 (Observability), `./logical-architecture.md` §15
+> **Status:** Design (original Phase-4 wireframes) + as-built addendum of 2026-08-28 — see [As-built addendum](#as-built-addendum-2026-08-28) for what actually ships in `extensions/agent-dashboard` today  
+> **Complements:** ADR-018 (Observability), ADR-032 (sampling QA), `./logical-architecture.md` §15
 
 ---
 
@@ -378,3 +378,45 @@ View and edit the governance rules. Changes are validated in-browser and propose
 3. **Progressive disclosure.** Session list → correlation tree → minion detail → tool call detail. Drill down; never show everything at once.
 4. **Read-only by default.** The dashboard is an observability tool. Writes (retry, cancel, config change) require explicit action.
 5. **Exportable.** Every view can export data as JSON for offline analysis or sharing.
+
+---
+
+## As-built addendum (2026-08-28)
+
+The sections above are the original Phase-4 design. What ships today in
+`extensions/agent-dashboard/src/dashboard.ts` (a bare `node:http` server, not
+an `apps__create_app` artifact) is:
+
+### Shipped API routes
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | liveness |
+| `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/minion-runs` | session explorer |
+| `GET /correlation-tree/:correlationId` | correlation tree view |
+| `GET /pending-approvals` | pending approvals list |
+| `GET /api/approvals/pending` | pending approvals (API) |
+| `POST /api/approvals/:id/resolve` | operator approve/deny — proxied to the toolshed operator endpoint with the operator's identity |
+| `GET /api/audit?correlationId=...` | audit search |
+| `GET /api/sessions/:id/cost` | per-session token/cost view (`model-cost.ts`) |
+| `GET /api/sampling-qa` | per-effect-type sampling-QA stats: reviewed, disagreed, disagreement rate, breaker tripped (ADR-032) |
+| `POST /api/sampling-qa/:effectType/reset` | reset a tripped sampling-QA breaker (clears the type's verdict window and trip state); 404 when no QA provider is wired |
+| `GET /api/events` | Server-Sent Events: new runs/approvals/audit entries, polled every 2s per connection |
+| `GET /api/config` | configuration view |
+
+### Shipped operator surfaces
+
+- **Approvals panel** — pending approvals with approve/deny actions; the
+  resolution is proxied to the toolshed's operator HTTP endpoint (bearer
+  `TOOLSHED_OPERATOR_TOKEN`) so the approver identity is authenticated, and
+  `review_commit` approvals (post-hoc sampling QA) arrive on the same panel.
+- **Sampling-QA panel** — per-effect-type disagreement stats with a reset
+  button wired to the reset route above (runbook:
+  `./runbooks/stream-operations.md` §2).
+
+### Auth
+
+Bearer token (`DASHBOARD_AUTH_TOKEN`) enforced by the app itself — with a
+loud startup warning when unset — and Azure Container Apps Entra ID easy-auth
+as the production front door (Terraform `dashboard_easy_auth`). `?token=` is
+accepted on `/api/events` only (SSE clients cannot set headers).

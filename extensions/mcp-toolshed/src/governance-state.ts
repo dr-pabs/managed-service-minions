@@ -3,21 +3,35 @@ import type { RateLimitConfig, RateLimitResult, RateLimiter } from './rate-limit
 import { CircuitBreaker, type CircuitBreakerConfig } from './circuit-breaker.js';
 
 /**
- * Shared-state seam for the governance operations that currently live as
- * process-local structures inside the toolshed (H5/F6, ADR-025): rate-limit
- * token buckets, circuit breaker state, and pending-approval CRUD. Every
- * operation here is exactly what `executeTool`/`gateDestructiveCall`
- * (`toolshed.ts`) already needs — extracted from the existing
- * `RateLimiter`/`CircuitBreaker`/`SessionStore` call sites, not invented.
+ * Shared-state seam for the governance operations that live as process-local
+ * structures inside the toolshed (H5/F6, ADR-025) — rate-limit token buckets,
+ * circuit breaker state, and pending-approval CRUD. Every operation here is
+ * exactly what `executeTool`/`gateDestructiveCall` (`toolshed.ts`) already
+ * needs — extracted from the existing `RateLimiter`/`CircuitBreaker`/
+ * `SessionStore` call sites, not invented.
  *
- * Today the only implementation (`createInProcessGovernanceStateStore`) is a
- * thin adapter over those same in-process structures — this milestone is
- * intentionally an additive interface plus adapter, not a rewrite of the
- * rate limiter/breaker/approval logic itself (see the ExecPlan Decision Log
- * for Milestone 7: the smaller, behavior-preserving diff was chosen over a
- * full refactor of every call site). A future distributed implementation
- * (Redis, per ADR-025's trigger condition) implements this same interface
- * without `toolshed.ts` needing to change again.
+ * The six rate-limit/breaker methods are **async**: their state moves out of
+ * process memory into a shared store for multi-replica scaling (Milestone 18,
+ * ADR-026), and a network-backed implementation can only offer a promise. The
+ * approval CRUD methods stay **sync** because approvals remain on the
+ * `SessionStore` (SQLite), whose interface is synchronous today — moving them
+ * is explicitly out of scope for ADR-026.
+ *
+ * Two implementations satisfy this interface:
+ *  - `createInProcessGovernanceStateStore` (below) — the original thin adapter
+ *    over the in-process `RateLimiter`/`CircuitBreaker`/`SessionStore`. Still
+ *    the default in `createDefaultToolshedState` and in dev, it now wraps the
+ *    same synchronous results in promises so the interface is uniformly async.
+ *  - `createSharedGovernanceStateStore` (`shared-governance-state.ts`,
+ *    Milestone 18) — persists the rate-limit buckets and breaker state to the
+ *    repository's existing Azure Table Storage layer (local Azurite emulation
+ *    in dev) so multiple toolshed replicas share one view of governance state.
+ *    Approval CRUD is delegated through to the injected `SessionStore`.
+ *
+ * Extracting this interface was intentionally an additive seam rather than a
+ * rewrite of the rate limiter/breaker/approval logic itself (see the ExecPlan
+ * Decision Log for Milestone 7); Milestone 18 is the first non-in-process
+ * implementation of it.
  */
 export interface GovernanceStateStore {
   /**
@@ -26,7 +40,7 @@ export interface GovernanceStateStore {
    * per-server `server:${serverAlias}` bucket, whose limit is looked up from
    * `governance.rateLimits` per call.
    */
-  takeRateLimitToken(key: string, limit: RateLimitConfig, now?: number): RateLimitResult;
+  takeRateLimitToken(key: string, limit: RateLimitConfig, now?: number): Promise<RateLimitResult>;
 
   /**
    * Attempts to take one token from the named bucket using the rate
@@ -41,16 +55,16 @@ export interface GovernanceStateStore {
    * isolation — collapsing this into a single governance-config-driven
    * method would silently change that behavior).
    */
-  takeDefaultRateLimitToken(key: string, now?: number): RateLimitResult;
+  takeDefaultRateLimitToken(key: string, now?: number): Promise<RateLimitResult>;
 
   /** Whether the named breaker currently permits a call (state read + half-open bookkeeping). */
-  canExecuteBreaker(key: string): boolean;
+  canExecuteBreaker(key: string): Promise<boolean>;
   /** Records a successful downstream call against the named breaker. */
-  recordBreakerSuccess(key: string): void;
+  recordBreakerSuccess(key: string): Promise<void>;
   /** Records a failed downstream call against the named breaker. */
-  recordBreakerFailure(key: string): void;
+  recordBreakerFailure(key: string): Promise<void>;
   /** Seconds until the named breaker's open state may transition to half-open (0 if not open). */
-  breakerRetryAfterSeconds(key: string): number;
+  breakerRetryAfterSeconds(key: string): Promise<number>;
 
   /** Persists a newly created pending approval. */
   createApproval(approval: PendingApproval): void;
@@ -76,6 +90,14 @@ export interface GovernanceStateStore {
  * existing `SessionStore` for approval CRUD. No new state is introduced —
  * this exists purely to give `toolshed.ts` one seam to call through instead
  * of reaching into three different collaborators directly.
+ *
+ * The rate-limit/breaker methods are declared `async` so this adapter and
+ * `createSharedGovernanceStateStore` present one uniformly-async interface:
+ * the underlying `RateLimiter`/`CircuitBreaker` calls are still synchronous,
+ * so each method simply resolves with the same value the pre-async interface
+ * returned. `async` also converts a (theoretical) synchronous throw from a
+ * misbehaving collaborator into a rejected promise rather than a throw the
+ * `await`ing caller never expects — matching the shared store's error model.
  */
 export function createInProcessGovernanceStateStore(
   rateLimiter: RateLimiter,
@@ -93,22 +115,22 @@ export function createInProcessGovernanceStateStore(
   }
 
   return {
-    takeRateLimitToken(key, limit, now) {
+    async takeRateLimitToken(key, limit, now) {
       return rateLimiter.canExecuteWithLimit(key, limit, now);
     },
-    takeDefaultRateLimitToken(key, now) {
+    async takeDefaultRateLimitToken(key, now) {
       return rateLimiter.canExecute(key, now);
     },
-    canExecuteBreaker(key) {
+    async canExecuteBreaker(key) {
       return getOrCreateBreaker(key).canExecute();
     },
-    recordBreakerSuccess(key) {
+    async recordBreakerSuccess(key) {
       getOrCreateBreaker(key).recordSuccess();
     },
-    recordBreakerFailure(key) {
+    async recordBreakerFailure(key) {
       getOrCreateBreaker(key).recordFailure();
     },
-    breakerRetryAfterSeconds(key) {
+    async breakerRetryAfterSeconds(key) {
       return getOrCreateBreaker(key).retryAfterSeconds;
     },
     createApproval(approval) {

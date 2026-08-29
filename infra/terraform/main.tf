@@ -43,11 +43,12 @@ module "managed_identity" {
   location            = var.location
   tags                = local.common_tags
   names = {
-    orchestrator = "mi-orch-${local.base_name}"
-    slack_bot    = "mi-slack-${local.base_name}"
-    teams_bot    = "mi-teams-${local.base_name}"
-    dashboard    = "mi-dash-${local.base_name}"
-    toolshed     = "mi-toolshed-${local.base_name}"
+    orchestrator  = "mi-orch-${local.base_name}"
+    slack_bot     = "mi-slack-${local.base_name}"
+    teams_bot     = "mi-teams-${local.base_name}"
+    dashboard     = "mi-dash-${local.base_name}"
+    toolshed      = "mi-toolshed-${local.base_name}"
+    queue_ingress = "mi-queue-ingress-${local.base_name}"
   }
 }
 
@@ -136,6 +137,14 @@ module "service_bus" {
     {
       principal_id         = module.managed_identity.orchestrator_principal_id
       role_definition_name = "Azure Service Bus Data Receiver"
+    },
+    {
+      principal_id         = module.managed_identity.queue_ingress_principal_id
+      role_definition_name = "Azure Service Bus Data Sender"
+    },
+    {
+      principal_id         = module.managed_identity.queue_ingress_principal_id
+      role_definition_name = "Azure Service Bus Data Receiver"
     }
   ]
 }
@@ -188,9 +197,17 @@ module "container_apps" {
   subnet_id        = module.networking.container_apps_subnet_id
 
   orchestrator = {
-    name             = "ca-orchestrator-${var.environment}"
-    identity_id      = module.managed_identity.orchestrator_id
-    image            = "${module.container_registry.login_server}/orchestrator:latest"
+    name         = "ca-orchestrator-${var.environment}"
+    identity_id  = module.managed_identity.orchestrator_id
+    image        = "${module.container_registry.login_server}/orchestrator:latest"
+    min_replicas = 1
+    max_replicas = 5
+  }
+
+  queue_ingress = {
+    name             = "ca-queue-ingress-${var.environment}"
+    identity_id      = module.managed_identity.queue_ingress_id
+    image            = "${module.container_registry.login_server}/queue-ingress:latest"
     min_replicas     = 1
     max_replicas     = 5
     service_bus_rule = module.service_bus.scale_rule
@@ -228,6 +245,12 @@ module "container_apps" {
     name        = "ca-toolshed-${var.environment}"
     identity_id = module.managed_identity.toolshed_id
     image       = "${module.container_registry.login_server}/mcp-toolshed:latest"
+    # Milestone 18 (ADR-026): the toolshed now scales past one replica — its
+    # rate-limit buckets and circuit breaker state live in the shared
+    # `GovernanceState` Azure Table, so multiple replicas enforce one view of
+    # them. Pending-approval CRUD remains single-writer on SQLite (see ADR-026).
+    min_replicas = 1
+    max_replicas = 5
   }
 
   log_analytics_workspace_id = module.observability.workspace_id
@@ -250,14 +273,19 @@ module "container_apps" {
     {
       SERVICE_BUS_CONNECTION_STRING = module.service_bus.primary_connection_string
       STORAGE_CONNECTION_STRING     = module.storage.primary_connection_string
-      SLACK_BOT_TOKEN               = var.slack_bot_token
-      SLACK_SIGNING_SECRET          = var.slack_signing_secret
-      MICROSOFT_APP_ID              = var.microsoft_app_id
-      MICROSOFT_APP_PASSWORD        = var.microsoft_app_password
-      GITHUB_TOKEN                  = var.github_token
-      AZURE_DEVOPS_PAT              = var.azure_devops_pat
-      SERVICENOW_API_KEY            = var.servicenow_api_key
-      JIRA_API_TOKEN                = var.jira_api_token
+      # Milestone 18 (ADR-026): the toolshed reads this to persist rate-limit
+      # buckets and circuit breaker state to the shared `GovernanceState`
+      # table (default table name matches modules/storage/main.tf). Injected as
+      # a Container App secret/env var on every app; only the toolshed reads it.
+      TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING = module.storage.primary_connection_string
+      SLACK_BOT_TOKEN                             = var.slack_bot_token
+      SLACK_SIGNING_SECRET                        = var.slack_signing_secret
+      MICROSOFT_APP_ID                            = var.microsoft_app_id
+      MICROSOFT_APP_PASSWORD                      = var.microsoft_app_password
+      GITHUB_TOKEN                                = var.github_token
+      AZURE_DEVOPS_PAT                            = var.azure_devops_pat
+      SERVICENOW_API_KEY                          = var.servicenow_api_key
+      JIRA_API_TOKEN                              = var.jira_api_token
     },
     var.model_provider_keys
   )

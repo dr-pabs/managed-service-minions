@@ -39,14 +39,16 @@ graph TB
             subgraph "Compute"
                 ca_env["Container Apps Environment\n(Consumption plan)"]
                 orch["Orchestrator App\n(1-5 replicas)"]
+                qi_app["Queue-Ingress App\n(1-5 replicas, KEDA)"]
+                toolshed_app["Toolshed App\n(1-5 replicas, ADR-026)"]
+                dash_app["Dashboard App\n(1 replica)"]
                 slack_app["Slack Bot App\n(1 replica)"]
                 teams_app["Teams Bot App\n(1 replica)"]
             end
             
             subgraph "Messaging"
                 sb_ns["Service Bus Namespace\n(Standard tier)"]
-                sb_topic["Topic: minion-tasks"]
-                sb_subs["5 Subscriptions\n(1 per minion type)"]
+                sb_queue["Queue: minion-tasks\n(single work queue, ADR-027)"]
             end
             
             subgraph "Storage"
@@ -197,14 +199,17 @@ Examples:
 | **NSG: container-apps** | `nsg-ca-goosefw-{env}` | — | Inbound: 443 from Internet; Outbound: 443, 5671 |
 | **NSG: private-endpoints** | `nsg-pe-goosefw-{env}` | — | Inbound: 443, 5671 from container-apps |
 | **Container Apps Environment** | `cae-goosefw-{env}` | Consumption | Workload profiles: Consumption |
-| **Container App: Orchestrator** | `ca-orchestrator-{env}` | — | 1 vCPU, 2 GB, 1–5 replicas |
+| **Container App: Orchestrator** | `ca-orchestrator-{env}` | — | 1 vCPU, 2 GB, 1–5 replicas (no KEDA rule — the queue scaler moved to queue-ingress, ADR-027) |
+| **Container App: Queue-Ingress** | `ca-queue-ingress-{env}` | — | 1 vCPU, 2 GB, 1–5 replicas, KEDA on `minion-tasks` queue depth |
+| **Container App: Toolshed** | `ca-toolshed-{env}` | — | 0.5 vCPU, 1 GB, 1–5 replicas (shared governance state, ADR-026) |
+| **Container App: Dashboard** | `ca-dashboard-{env}` | — | 0.5 vCPU, 1 GB, 1 replica (pinned, ADR-026) |
 | **Container App: Slack Bot** | `ca-slackbot-{env}` | — | 0.5 vCPU, 1 GB, 1 replica |
 | **Container App: Teams Bot** | `ca-teamsbot-{env}` | — | 0.5 vCPU, 1 GB, 1 replica |
-| **Service Bus Namespace** | `sb-goosefw-{env}` | Standard | Sessions, DLQ, duplicate detection |
-| **Service Bus Topic** | `minion-tasks` | — | All minion tasks |
-| **Service Bus Subscriptions** | `code-explorer`, `code-reviewer`, `pr-crafter`, `ticket-analyst`, `security-auditor` | — | Filtered by minion_type property |
+| **Service Bus Namespace** | `sb-goosefw-{env}` | Standard | DLQ with reason codes; idempotency handled consumer-side, not broker duplicate detection (ADR-027) |
+| **Service Bus Queue** | `minion-tasks` | — | Single work-item queue (ADR-027; no topic, no per-minion-type subscriptions or `minion_type` filtering), `max_delivery_count = 3` |
 | **Storage Account** | `stgoosefw{env}` | LRS / ZRS | Tables + Blobs |
 | **Table** | `ToolCallLog` | — | Immutable tool call log |
+| **Table** | `GovernanceState` | — | Shared rate-limit buckets + circuit breaker state (ADR-026) |
 | **Blob Container** | `minion-outputs` | Cool | Full minion output artifacts |
 | **Blob Container** | `sqlite-backups` | Cool | Orchestrator SQLite WAL snapshots |
 | **Key Vault** | `kv-goosefw-{env}` | Standard | MCP credentials, bot secrets |
@@ -596,7 +601,7 @@ flowchart TB
     preview["Preview Deploy\n(dev env)"]
     
     merge["Merge to main"]
-    build["Build Images\norchestrator, bots"]
+    build["Build Images\n11 images (all extensions incl.\nwebhook-ingress + queue-ingress)"]
     push["Push to ACR\nlatest + git-sha"]
     infra_plan["Terraform Plan"]
     infra_apply["Terraform Apply"]
@@ -635,10 +640,10 @@ GitHub Repo: org/minions-agent-framework
 │   └── Preview deployment (dev environment)
 │
 ├── Merge to main
-│   ├── Build container images
-│   │   ├── orchestrator
-│   │   ├── slack-bot
-│   │   └── teams-bot
+│   ├── Build container images (11: orchestrator, mcp-toolshed,
+│   │   mcp-github, mcp-azure-devops, mcp-servicenow, mcp-jira,
+│   │   slack-bot, teams-bot, agent-dashboard,
+│   │   webhook-ingress, queue-ingress)
 │   ├── Push to ACR
 │   │   ├── Tag: latest
 │   │   └── Tag: git-sha
@@ -664,8 +669,10 @@ GitHub Repo: org/minions-agent-framework
 ├── ci.yml                 # PR: typecheck, build, lint, unit tests, Terraform fmt/validate/test
 ├── terraform-plan.yml     # PR: Terraform plan for the target environment (OIDC)
 ├── terraform-apply.yml    # Merge to main: Terraform apply for the target environment (OIDC, env protection)
-└── build.yml              # Build + push container images (future)
+└── container-build.yml    # Build + push the 11 container images (matrix over every extension)
 ```
+
+> **Note:** CI builds a `webhook-ingress` image, but no Terraform container app deploys it yet — the image is built-but-not-deployed (known gap; see `extensions/webhook-ingress/README.md`). Six container apps are deployed: orchestrator, queue-ingress, toolshed, dashboard, slack-bot, teams-bot.
 
 See [`docs/terraform-bootstrap.md`](./terraform-bootstrap.md) for OIDC setup and backend bootstrap instructions.
 
@@ -824,10 +831,10 @@ Infrastructure is defined in `infra/terraform/` using Terraform 1.9+ with the `a
 | `observability` | `modules/observability/` | Log Analytics workspace |
 | `managed_identity` | `modules/managed_identity/` | User-assigned identities for orchestrator and bots |
 | `keyvault` | `modules/keyvault/` | Key Vault with RBAC and role assignments |
-| `storage` | `modules/storage/` | Storage account, `ToolCallLog` table, blob containers, role assignments |
-| `service_bus` | `modules/service_bus/` | Standard namespace, `minion-tasks` topic, 5 subscriptions, role assignments |
+| `storage` | `modules/storage/` | Storage account, `ToolCallLog` + `GovernanceState` tables, blob containers, role assignments |
+| `service_bus` | `modules/service_bus/` | Standard namespace, single `minion-tasks` work queue (ADR-027), role assignments |
 | `container_registry` | `modules/container_registry/` | Basic ACR and role assignments |
-| `container_apps` | `modules/container_apps/` | Container Apps Environment, orchestrator, slack bot, teams bot, KEDA scale rule |
+| `container_apps` | `modules/container_apps/` | Container Apps Environment; orchestrator, queue-ingress (KEDA queue-depth scale rule), toolshed, dashboard, slack bot, teams bot |
 | `ai_foundry` | `modules/ai_foundry/` | AI Hub and AI Project via `azapi`, model deployments |
 | `grafana` | `modules/grafana/` | Managed Grafana Essential, role assignments |
 

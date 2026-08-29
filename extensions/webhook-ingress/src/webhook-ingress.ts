@@ -276,7 +276,7 @@ async function postGovernedReplyComment(
   sessionId: string,
   text: string
 ): Promise<void> {
-  const token = mintMinionToken({ minionType: 'code_reviewer', sessionId, correlationId }, signingSecret);
+  const token = mintMinionToken({ agent_id: 'code_reviewer', scope_id: sessionId, correlation_id: correlationId }, signingSecret);
   const result = await toolshed.verifyAndExecuteTool(
     { minionToken: token, correlationId, attempt: 1 },
     'github',
