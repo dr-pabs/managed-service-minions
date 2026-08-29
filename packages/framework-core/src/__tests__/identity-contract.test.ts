@@ -35,9 +35,10 @@ interface IdentityVector {
 }
 
 const CONTRACTS_DIR = resolveContractsDir();
-const VECTORS_PATH = join(CONTRACTS_DIR, 'vectors', 'identity', 'v1', 'vectors.json');
+const VECTORS_PATH =
+  CONTRACTS_DIR !== undefined ? join(CONTRACTS_DIR, 'vectors', 'identity', 'v1', 'vectors.json') : '';
 
-const vectorsFileExists = existsSync(VECTORS_PATH);
+const vectorsFileExists = CONTRACTS_DIR !== undefined && existsSync(VECTORS_PATH);
 if (!vectorsFileExists) {
   console.warn(
     [
