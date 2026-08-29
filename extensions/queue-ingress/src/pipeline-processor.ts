@@ -339,7 +339,7 @@ export class PipelineWorkItemProcessor implements MessageProcessor {
     }
 
     const result = describeOutcome(item, outcome);
-    this.deps.outcomes.set(item.idempotency_key, {
+    await this.deps.outcomes.set(item.idempotency_key, {
       status: 'completed',
       result,
       completedAt: (this.deps.deps.now ?? Date.now)(),
