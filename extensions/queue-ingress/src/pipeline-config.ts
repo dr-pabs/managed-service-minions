@@ -24,28 +24,6 @@ interface RawReconcileCheck {
   assert?: unknown;
 }
 
-interface RawJudge {
-  agent?: unknown;
-  system_prompt?: unknown;
-  sample_percent?: unknown;
-}
-
-interface RawVerify {
-  verifier?: unknown;
-  schema?: unknown;
-  reconcile_checks?: unknown;
-  judge?: unknown;
-}
-
-interface RawPipeline {
-  max_attempts?: unknown;
-  on_failure?: unknown;
-  classify?: unknown;
-  act?: unknown;
-  verify?: unknown;
-  commit?: unknown;
-}
-
 interface RawConfigFile {
   item_pipelines?: unknown;
 }

@@ -177,7 +177,6 @@ class FakeSamplingQaDb {
   close = jest.fn();
 
   prepare(sql: string): Statement {
-    const self = this;
     const empty: Statement = { run: () => ({ changes: 0 }), get: () => undefined, all: () => [] };
     // Deletes are matched first: `DELETE FROM sampling_qa_verdicts WHERE ...`
     // also contains the substring `FROM sampling_qa_verdicts WHERE ...`, so it
@@ -186,7 +185,7 @@ class FakeSamplingQaDb {
       return {
         ...empty,
         run: (...params: unknown[]) => {
-          self.verdicts = self.verdicts.filter((v) => v.effect_type !== String(params[0]));
+          this.verdicts = this.verdicts.filter((v) => v.effect_type !== String(params[0]));
           return { changes: 1 };
         },
       };
@@ -195,7 +194,7 @@ class FakeSamplingQaDb {
       return {
         ...empty,
         run: (...params: unknown[]) => {
-          self.tripped.delete(String(params[0]));
+          this.tripped.delete(String(params[0]));
           return { changes: 1 };
         },
       };
@@ -204,8 +203,8 @@ class FakeSamplingQaDb {
       return {
         ...empty,
         run: (...params: unknown[]) => {
-          self.verdicts.push({
-            seq: self.verdicts.length + 1,
+          this.verdicts.push({
+            seq: this.verdicts.length + 1,
             effect_type: params[0],
             correlation_id: params[1],
             draft_ref: params[2],
@@ -220,7 +219,7 @@ class FakeSamplingQaDb {
       return {
         ...empty,
         run: (...params: unknown[]) => {
-          self.tripped.add(String(params[0]));
+          this.tripped.add(String(params[0]));
           return { changes: 1 };
         },
       };
@@ -228,20 +227,20 @@ class FakeSamplingQaDb {
     if (sql.includes('FROM sampling_qa_verdicts WHERE effect_type')) {
       return {
         ...empty,
-        all: (...params: unknown[]) => self.verdicts.filter((v) => v.effect_type === params[0]),
+        all: (...params: unknown[]) => this.verdicts.filter((v) => v.effect_type === params[0]),
       };
     }
     if (sql.includes('FROM sampling_qa_verdicts')) {
-      return { ...empty, all: () => [...self.verdicts] };
+      return { ...empty, all: () => [...this.verdicts] };
     }
     if (sql.includes('SELECT 1 FROM sampling_qa_tripped')) {
       return {
         ...empty,
-        get: (...params: unknown[]) => (self.tripped.has(String(params[0])) ? { 1: 1 } : undefined),
+        get: (...params: unknown[]) => (this.tripped.has(String(params[0])) ? { 1: 1 } : undefined),
       };
     }
     if (sql.includes('SELECT effect_type FROM sampling_qa_tripped')) {
-      return { ...empty, all: () => Array.from(self.tripped).sort().map((t) => ({ effect_type: t })) };
+      return { ...empty, all: () => Array.from(this.tripped).sort().map((t) => ({ effect_type: t })) };
     }
     return empty;
   }
