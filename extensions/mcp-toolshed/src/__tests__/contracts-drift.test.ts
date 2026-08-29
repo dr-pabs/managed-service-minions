@@ -4,7 +4,7 @@ import Ajv2020 from 'ajv/dist/2020';
 import { describe, expect, it } from '@jest/globals';
 import { mintMinionToken, resolveContractsDir } from 'framework-core';
 import { createMemoryStore } from '../store.js';
-import { createMemoryEffectStore, toDecisionRecord, toDraftDocument } from '../effect-store.js';
+import { toDecisionRecord, toDraftDocument } from '../effect-store.js';
 import {
   EffectGateway,
   MapVerificationResolver,

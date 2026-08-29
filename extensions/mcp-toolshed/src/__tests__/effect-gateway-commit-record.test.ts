@@ -2,7 +2,6 @@ import { describe, expect, it } from '@jest/globals';
 import type { TableClient } from '@azure/data-tables';
 import { mintMinionToken } from 'framework-core';
 import { createMemoryStore } from '../store.js';
-import { createMemoryEffectStore } from '../effect-store.js';
 import {
   EffectGateway,
   MapVerificationResolver,

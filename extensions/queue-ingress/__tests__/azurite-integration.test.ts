@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { TableClient } from '@azure/data-tables';
 import { mintMinionToken } from 'framework-core';
 import { EffectGateway, MapVerificationResolver, RecordingConnector, TableCommitRecordStore, effectTypesFromRecord } from 'mcp-toolshed';

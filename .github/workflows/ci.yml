@@ -147,6 +147,11 @@ jobs:
         with:
           repository: dr-pabs/forge-contracts
           path: contracts-checkout
+          # forge-contracts is private: the job token cannot read it. Add a
+          # repo-scoped read PAT as FORGE_CONTRACTS_TOKEN (repo Settings ->
+          # Secrets -> Actions); the github.token fallback keeps this working
+          # if the repository is made public.
+          token: ${{ secrets.FORGE_CONTRACTS_TOKEN || github.token }}
 
       - uses: pnpm/action-setup@v4
 
