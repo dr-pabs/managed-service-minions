@@ -107,8 +107,55 @@ returned, or signatures failed (ADR-033).
 
 ---
 
+## 6. Remediation settings (2026-08-29)
+
+The cross-repo remediation changed or added these operational surfaces:
+
+Durability (at-most-once at deployment scale):
+
+- `IDEMPOTENCY_STATE_CONNECTION_STRING` — when set, completed work-item
+  outcomes are recorded to the shared `idempotency` Azure Table, so a
+  duplicate landing on another consumer replica (the consumer scales 1–5)
+  or after a restart short-circuits instead of re-running (ADR-034).
+  Without it the in-memory store is used with a loud startup warning —
+  single-process local dev only.
+- `TOOLSHED_GOVERNANCE_STATE_CONNECTION_STRING` — one secret, two tables:
+  the M18 `GovernanceState` table and the `commits` table, where the
+  effect gateway records committed idempotency keys so a restart or a
+  second gateway instance replays the recorded outcome without
+  re-executing the effect.
+
+Cost control:
+
+- `DAILY_BUDGET_MAX_COST_USD` is now genuinely charged — every settled
+  pipeline item's final spend (including the partial spend of a
+  `BUDGET_EXCEEDED` halt) is recorded at terminal settle, and the consume
+  loop pauses when the cap trips (the `budget_day_*` audit entries mark
+  the transitions).
+- A recipe declaring `max_cost_usd` with `PIPELINE_PRICE_PER_1K_TOKENS_USD`
+  unset or zero fails startup loudly naming both variables;
+  `PIPELINE_ALLOW_UNPRICED=1` opts out for simulation only.
+
+Identity:
+
+- `TOOLSHED_ALLOW_UNSIGNED=1` now resolves every unsigned caller to the
+  fixed `dev-unsigned` principal (team `dev`) — self-reported identity
+  fields are gone (ADR-035). A startup warning names the shared principal.
+
+Verifying the durability stack locally:
+
+    npx azurite --tableHost 127.0.0.1   # or: docker compose --profile dev up -d azurite
+    AZURITE_TABLES_CONNECTION_STRING='UseDevelopmentStorage=true' pnpm --filter queue-ingress test -- azurite
+    AZURITE_TABLES_CONNECTION_STRING='UseDevelopmentStorage=true' pnpm --filter mcp-toolshed test -- azurite
+
+CI: the `contracts-and-azurite` job checks out `dr-pabs/forge-contracts`
+beside the repo (drift suites run instead of skip) and runs both Azurite
+suites against a service container.
+
+---
+
 ## Related
 
 - `docs/runbooks/production-handoff.md` (support model), `docs/error-handling.md`
-- ADR-027, ADR-030, ADR-031, ADR-032, ADR-033
-- forge-contracts repo: `forge-ops.execplan.md`, `schemas/escalation/v1/`, `schemas/budget/v1/`
+- ADR-027, ADR-030, ADR-031, ADR-032, ADR-033, ADR-034, ADR-035
+- forge-contracts repo: `forge-ops.execplan.md`, `forge-ops-remediation.execplan.md`, `schemas/escalation/v1/`, `schemas/budget/v1/`
