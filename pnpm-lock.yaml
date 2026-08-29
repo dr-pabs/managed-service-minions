@@ -309,6 +309,9 @@ importers:
       '@azure/service-bus':
         specifier: ^7.9.0
         version: 7.9.5
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       framework-core:
         specifier: workspace:*
         version: link:../../packages/framework-core

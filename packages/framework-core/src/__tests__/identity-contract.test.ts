@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveContractsDir } from '../contracts-dir.js';
 import { mintMinionToken, verifyMinionToken } from '../minion-token.js';
 import type { MinionTokenClaims } from '../minion-token.js';
 
@@ -33,7 +34,7 @@ interface IdentityVector {
   tamper?: string;
 }
 
-const CONTRACTS_DIR = process.env.FORGE_CONTRACTS_DIR ?? '/Volumes/ExtDisk1/forge-contracts';
+const CONTRACTS_DIR = resolveContractsDir();
 const VECTORS_PATH = join(CONTRACTS_DIR, 'vectors', 'identity', 'v1', 'vectors.json');
 
 const vectorsFileExists = existsSync(VECTORS_PATH);
@@ -44,7 +45,7 @@ if (!vectorsFileExists) {
       '⚠️  ────────────────────────────────────────────────────────────────────────',
       '⚠️  identity-contract.test.ts: SKIPPING the identity/v1 conformance vectors.',
       `⚠️  No vectors file at: ${VECTORS_PATH}`,
-      `⚠️  FORGE_CONTRACTS_DIR is ${process.env.FORGE_CONTRACTS_DIR ?? 'unset (default used)'}.`,
+      `⚠️  resolved contracts dir: ${CONTRACTS_DIR ?? 'none found (set FORGE_CONTRACTS_DIR or place forge-contracts as a workspace sibling)'}.`,
       '⚠️  Point it at a checkout of the forge-contracts repository to run this suite;',
       '⚠️  the token code is otherwise covered only by minion-token.test.ts.',
       '⚠️  ────────────────────────────────────────────────────────────────────────',
