@@ -62,6 +62,33 @@ export function resolvePipelinesDir(configured: string | undefined, defaultDir: 
 }
 
 /**
+ * Fails loud when a pipeline declares a `max_cost_usd` cap the resolved price
+ * can never enforce (remediation Milestone 3): a cap divided by a zero
+ * `PIPELINE_PRICE_PER_1K_TOKENS_USD` is infinite, so every item cap would be
+ * silently disabled — the exact drift the remediation closes. Throws naming
+ * the offending item types and both environment variables unless
+ * `PIPELINE_ALLOW_UNPRICED=1` explicitly accepts simulation semantics.
+ */
+export function assertPriced(
+  pipelines: Map<string, LoadedPipeline>,
+  pricePer1kTokensUsd: number,
+  allowUnpriced: boolean = process.env.PIPELINE_ALLOW_UNPRICED === '1'
+): void {
+  if (allowUnpriced || pricePer1kTokensUsd > 0) {
+    return;
+  }
+  const capped = [...pipelines.entries()]
+    .filter(([, pipeline]) => (pipeline.config.max_cost_usd ?? 0) > 0)
+    .map(([itemType, pipeline]) => `'${itemType}' (max_cost_usd ${pipeline.config.max_cost_usd})`);
+  if (capped.length === 0) {
+    return;
+  }
+  throw new Error(
+    `[queue-ingress] item pipeline(s) declare a max_cost_usd cap but PIPELINE_PRICE_PER_1K_TOKENS_USD is unset or zero, so the cap can never trip: ${capped.join(', ')}. Set PIPELINE_PRICE_PER_1K_TOKENS_USD to the blended USD price per 1,000 tokens, or set PIPELINE_ALLOW_UNPRICED=1 to accept unenforced caps (simulation only).`
+  );
+}
+
+/**
  * Loads every item pipeline declared in `<recipesDir>/item-pipelines.yaml`.
  * Strictly additive and safe to deploy with no recipes present: an absent
  * file, an unreadable file, or a malformed mapping logs once and returns an

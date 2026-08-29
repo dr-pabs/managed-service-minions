@@ -69,6 +69,7 @@ jest.unstable_mockModule('../src/consumer.js', () => ({ consumeQueue }));
 // in pipeline-processor.test.ts and production-wiring.test.ts.
 const loadPipelines = jest.fn((_recipesDir: string) => new Map<string, unknown>());
 const resolvePipelinesDir = jest.fn((configured: string | undefined, defaultDir: string) => configured ?? defaultDir);
+const assertPriced = jest.fn();
 const buildEscalateEmitter = jest.fn((_options: unknown): unknown => undefined);
 const mockCommit = jest.fn();
 const buildGatewayCommit = jest.fn().mockReturnValue(mockCommit);
@@ -79,6 +80,7 @@ const PipelineWorkItemProcessor = jest.fn().mockImplementation(() => mockPipelin
 jest.unstable_mockModule('../src/pipeline-processor.js', () => ({
   loadPipelines,
   resolvePipelinesDir,
+  assertPriced,
   buildEscalateEmitter,
   buildGatewayCommit,
   PipelineVerificationResolver,
@@ -241,6 +243,27 @@ describe('queue-ingress index (Milestones 15-20 wiring)', () => {
     const consumeArg = consumeQueue.mock.calls[0][0];
     expect(consumeArg.store).toBe(mockSqliteStore);
     expect(consumeArg.dailyBudget).toBeUndefined();
+  });
+
+  it('charges settled pipeline items into the daily budget (onItemCost is wired to DailyBudget.record)', async () => {
+    // Remediation Milestone 3: the day cap was gated but never charged. The
+    // pipeline deps' onItemCost must be the SAME daily budget the consume
+    // loop gates on — charging it moves the loop's ledger.
+    process.env.DAILY_BUDGET_MAX_COST_USD = '100';
+    const pipelines = new Map([['refund_request', loadedRefundPipeline()]]);
+    loadPipelines.mockImplementation(() => pipelines);
+
+    await import('../src/index.js');
+    await flushMicrotasks();
+
+    const processorArg = PipelineWorkItemProcessor.mock.calls[0][0];
+    const onItemCost = processorArg.deps.onItemCost;
+    expect(typeof onItemCost).toBe('function');
+
+    onItemCost(7.5);
+    const consumeArg = consumeQueue.mock.calls[0][0];
+    expect(consumeArg.dailyBudget).toBeDefined();
+    expect(consumeArg.dailyBudget.spentUsd).toBe(7.5);
   });
 
   it('loads pipelines from the repo-relative recipes dir by default and honours PIPELINES_CONFIG_PATH', async () => {

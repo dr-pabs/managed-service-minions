@@ -6,6 +6,7 @@ import { consumeQueue } from './consumer.js';
 import { DailyBudget } from './cost-control.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
 import {
+  assertPriced,
   buildEscalateEmitter,
   buildGatewayCommit,
   loadPipelines,
@@ -100,11 +101,26 @@ async function main(): Promise<void> {
   const outcomes = new InMemoryIdempotencyStore();
   const fallback = new WorkItemProcessor({ runner, queue, outcomes });
 
+  // The daily throughput budget gates the consume loop (below) AND is charged
+  // by every settled pipeline item via `onItemCost` — the remediation Milestone
+  // 3 fix: the cap was gated but never charged, so it could never trip.
+  const dailyBudget = buildDailyBudget(process.env.DAILY_BUDGET_MAX_COST_USD);
+  const chargeDaily = dailyBudget ? (costUsd: number): void => dailyBudget.record(costUsd) : undefined;
+  // The day-cap exhaustion audit stays with the consume loop's existing
+  // transition detection: charging now makes `isExhausted()` trip for real,
+  // and that poll writes the `budget_day_*_exhausted` entry (one writer, one
+  // audit id — a second writer here would collide on the audit PK).
+  const pricePer1kTokensUsd = buildPricePer1kTokens(process.env.PIPELINE_PRICE_PER_1K_TOKENS_USD);
+
   // ADR-030 wiring: load the declarative pipelines. Fail-safe by construction —
   // no recipes (or a broken recipe) logs once inside loadPipelines and every
   // item keeps the WorkItemProcessor -> orchestrator runner path above.
   const recipesDir = resolvePipelinesDir(process.env.PIPELINES_CONFIG_PATH, defaultRecipesDir());
   const pipelines = loadPipelines(recipesDir);
+  // Remediation Milestone 3: a declared cap with an unpriced model layer is a
+  // configuration error, not a silent no-op (PIPELINE_ALLOW_UNPRICED=1 opts
+  // out for simulation).
+  assertPriced(pipelines, pricePer1kTokensUsd);
 
   let processor: MessageProcessor = fallback;
   if (pipelines.size > 0) {
@@ -136,7 +152,8 @@ async function main(): Promise<void> {
       reconcile: ({ minionToken, correlationId, attempt, serverAlias, toolName, params }) =>
         verifyAndExecuteTool({ minionToken, correlationId, attempt }, serverAlias, toolName, params),
       commit: buildGatewayCommit(gateway, resolver),
-      pricePer1kTokensUsd: buildPricePer1kTokens(process.env.PIPELINE_PRICE_PER_1K_TOKENS_USD),
+      pricePer1kTokensUsd,
+      ...(chargeDaily ? { onItemCost: chargeDaily } : {}),
       ...(escalate ? { escalate } : {}),
       ...(bridgeSecret ? { bridgeSecret } : {}),
     };
@@ -150,10 +167,9 @@ async function main(): Promise<void> {
     });
   }
 
-  const dailyBudget = buildDailyBudget(process.env.DAILY_BUDGET_MAX_COST_USD);
-
   // The daily budget gates the consume loop itself, so it applies identically
-  // to pipeline-routed items and fallback items (ADR-031, unchanged).
+  // to pipeline-routed items and fallback items (ADR-031, unchanged) — and the
+  // pipeline items now charge it, so the gate actually engages.
   await consumeQueue({ queue, processor, store, ...(dailyBudget ? { dailyBudget } : {}) });
 }
 
