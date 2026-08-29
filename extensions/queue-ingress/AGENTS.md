@@ -3,9 +3,10 @@
 Package-local agent guide (per the root `AGENTS.md` mandate: every runnable
 subproject carries its own AGENTS.md). This package is the Service Bus
 work-queue consumer for Stream (ADR-027) and also houses the item-pipeline
-engine, verification chain, cost control, and escalation emitter as libraries
-(ADR-030/031/033 — library-complete; production wiring pending, see
-`src/index.ts` and the README).
+engine, verification chain, cost control, and escalation emitter
+(ADR-030/031/033 — wired into the production consumer: `src/index.ts` routes
+items by `item_type` through `src/pipeline-processor.ts`, falling back to the
+orchestrator-runner path when no recipe matches; see the README).
 
 ## Commands
 
@@ -38,12 +39,15 @@ pnpm --filter queue-ingress test:soak    # Milestone 21 thousand-item soak (soak
 | `GOOSE_SERVE_URL` (fallback `GOOSE_BASE_URL`) | Goose runtime base URL (default `http://localhost:3284`) |
 | `TOOLSHED_SIGNING_SECRET` | HMAC secret for `identity/v1` minion tokens (ADR-029) |
 | `DAILY_BUDGET_MAX_COST_USD` | optional daily throughput cap; exhaustion pauses the queue, never drops work (ADR-031) |
-| `FORGE_BRIDGE_SECRET` / `FORGE_INTAKE_URL` | escalation-bridge signing secret and Flow intake URL (ADR-033; used by the bridge e2e — production wiring pending) |
+| `FORGE_BRIDGE_SECRET` / `FORGE_INTAKE_URL` | escalation-bridge signing secret and Flow intake URL (ADR-033); both set = production emitter armed, either unset = escalating items dead-letter as `ESCALATION_UNARMED` |
+| `PIPELINES_CONFIG_PATH` | recipes dir for `item-pipelines.yaml` (default: repo `recipes/`); absent = pipeline routing off, fallback path only |
+| `PIPELINE_PRICE_PER_1K_TOKENS_USD` | blended USD price per 1k tokens pricing pipeline model calls against recipe `max_cost_usd` caps (default 0 = caps never trip) |
 
 ## Invariants to preserve when editing
 
 - Dead-letter reason codes are load-bearing operator vocabulary:
-  `MALFORMED_ENVELOPE`, `POISON_MESSAGE`, `BUDGET_EXCEEDED`
+  `MALFORMED_ENVELOPE`, `POISON_MESSAGE`, `BUDGET_EXCEEDED`,
+  `ESCALATION_UNARMED`, `ESCALATION_UNRESOLVED`
   (`docs/runbooks/stream-operations.md` triages by them).
 - Idempotency is consumer-side (`IdempotencyStore`), not broker duplicate
   detection (ADR-027); record-before-settle ordering in `processor.ts` is what

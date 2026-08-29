@@ -4,12 +4,11 @@ Operator procedures for the Forge Ops Stream surfaces: the work queue and its
 dead-letter queue (ADR-027), cost-control pauses (ADR-031), the sampling-QA
 circuit breaker (ADR-032), and the escalation bridge (ADR-033).
 
-Scope note: some Stream capabilities (item-pipeline engine, per-item cost
-control, escalation emitter) are library-complete with production wiring
-pending (see ADR-030); the procedures below that depend on them apply once
-that wiring lands, and to test/staging environments that exercise the
-libraries today. DLQ triage, the daily-budget pause, and the sampling-QA
-breaker are live surfaces.
+Scope note: the item-pipeline engine, per-item cost control, and escalation
+emitter are wired into the production consumer (see ADR-030's wiring note):
+items are routed by `item_type` through their declarative pipeline, with
+unmatched types falling back to the orchestrator-runner path. All procedures
+below are live surfaces.
 
 ---
 
@@ -27,6 +26,8 @@ the dead-letter reason field carries one of:
 | `MALFORMED_ENVELOPE` | body failed `parseWorkItem` — not a JSON object, or missing/empty `item_type`/`idempotency_key`/`correlation_id`, or absent `payload`. No effect was attempted. | Fix the **producer**. Do not replay as-is — it will dead-letter again identically. If the item matters, re-enqueue a corrected envelope with the same `idempotency_key` (safe: idempotency short-circuits if any part already completed). |
 | `POISON_MESSAGE` | well-formed item that failed repeatedly until delivery count reached the poison threshold (default 3, mirroring the queue's `max_delivery_count`). | Read the item's audit trail by `correlation_id` (dashboard `GET /api/audit?correlationId=...`) to find the failing step. Fix the underlying cause (downstream outage, bad payload semantics), then re-enqueue. A replay of an item that partially completed is safe under the idempotency store. |
 | `BUDGET_EXCEEDED` | the item's accumulated model spend reached its recipe `max_cost_usd` cap (budget/v1 `scope: "item"`, `policy: "halt"`). The item halted; the queue kept flowing. | Decide whether the item was pathological (discard) or under-budgeted (raise `max_cost_usd` for its `item_type` in `recipes/item-pipelines.yaml`, redeploy config, re-enqueue). Check `warn_at_pct` warnings in the audit trail to see whether the spend ramped or spiked. |
+| `ESCALATION_UNARMED` | a pipeline item reached its escalate outcome but the bridge emitter is not armed (`FORGE_INTAKE_URL`/`FORGE_BRIDGE_SECRET` unset in this deployment). | Either arm the bridge (set both env vars to match the Forge runtime) and re-enqueue, or triage the item manually from its audit trail — the attempt history is under its `correlation_id`. |
+| `ESCALATION_UNRESOLVED` | the item was bridged to Flow and Flow's signed resolution came back `unresolved`. | Inspect the linked Flow run (the audit entry `toolName: bridge` carries `run_id`) and resolve manually; re-enqueue only after the underlying cause is fixed. |
 
 Never delete DLQ messages without recording the correlation id: the DLQ is
 the "no silent drops" guarantee (ADR-027/031).

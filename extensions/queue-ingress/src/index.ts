@@ -1,20 +1,39 @@
-import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool } from 'mcp-toolshed';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildToolshedState, createSqliteStore, initializeToolshed, verifyAndExecuteTool, EffectGateway, makeEffectTypePolicy, type EffectTypePolicy } from 'mcp-toolshed';
 import { createOrchestratorRunner, createHttpGooseClient } from 'orchestrator';
 import { consumeQueue } from './consumer.js';
 import { DailyBudget } from './cost-control.js';
 import { InMemoryIdempotencyStore } from './idempotency-store.js';
-import { WorkItemProcessor } from './processor.js';
+import {
+  buildEscalateEmitter,
+  buildGatewayCommit,
+  loadPipelines,
+  PipelineVerificationResolver,
+  PipelineWorkItemProcessor,
+  resolvePipelinesDir,
+  type SharedPipelineDeps,
+} from './pipeline-processor.js';
+import { WorkItemProcessor, type MessageProcessor } from './processor.js';
 import { InMemoryWorkItemQueue, type WorkItemQueue } from './queue.js';
 import { ServiceBusWorkItemQueue } from './service-bus-queue.js';
 
 /**
- * Production wiring for the queue-ingress consumer (Milestone 15) -- mirrors
+ * Production wiring for the queue-ingress consumer (Milestones 15-20) -- mirrors
  * `extensions/webhook-ingress/src/index.ts`: build a real in-process toolshed
  * via `mcp-toolshed`'s own `buildToolshedState()`, wire the real orchestrator
  * runner against it, then drain the work queue. The queue is a Service Bus
  * consumer when `SERVICE_BUS_CONNECTION_STRING` is set, otherwise an in-memory
  * queue (local dev / tests) -- the same dual-backend shape `mcp-toolshed`'s
  * `store.ts` uses, so the package runs with zero cloud dependency.
+ *
+ * Work items are routed by `item_type` (ADR-030 wiring): an item whose type
+ * has a pipeline in `recipes/item-pipelines.yaml` runs the bounded
+ * classify->act->verify->commit/escalate engine — with per-item cost caps
+ * (ADR-031, `BUDGET_EXCEEDED` dead-letter) and the escalation bridge emitter
+ * armed when `FORGE_INTAKE_URL` + `FORGE_BRIDGE_SECRET` are set (ADR-033) —
+ * while every other item takes the original `WorkItemProcessor` ->
+ * orchestrator runner path. No recipes present means no behaviour change.
  */
 const config = {
   connectionString: process.env.SERVICE_BUS_CONNECTION_STRING ?? '',
@@ -23,6 +42,12 @@ const config = {
   gooseUrl: process.env.GOOSE_SERVE_URL ?? process.env.GOOSE_BASE_URL ?? 'http://localhost:3284',
   signingSecret: process.env.TOOLSHED_SIGNING_SECRET ?? '',
 };
+
+/** Repo-relative default recipes dir (src/ or dist/ -> queue-ingress -> extensions -> repo root), the same path the tests use. */
+function defaultRecipesDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', '..', 'recipes');
+}
 
 async function buildQueue(): Promise<WorkItemQueue> {
   if (!config.connectionString) {
@@ -47,6 +72,17 @@ function buildDailyBudget(raw: string | undefined): DailyBudget | undefined {
   return new DailyBudget(maxCostUsd);
 }
 
+/**
+ * Parses `PIPELINE_PRICE_PER_1K_TOKENS_USD` — the blended USD price per 1,000
+ * tokens that turns model calls into per-item spend (ADR-031). Absent,
+ * non-numeric, or non-positive input prices calls at 0, so recipe cost caps
+ * are tracked but never trip (the engine's own documented default).
+ */
+function buildPricePer1kTokens(raw: string | undefined): number {
+  const price = Number.parseFloat(raw ?? '');
+  return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
 async function main(): Promise<void> {
   const queue = await buildQueue();
   const store = createSqliteStore(config.sqlitePath);
@@ -61,14 +97,63 @@ async function main(): Promise<void> {
     secret: config.signingSecret,
   });
 
-  const processor = new WorkItemProcessor({
-    runner,
-    queue,
-    outcomes: new InMemoryIdempotencyStore(),
-  });
+  const outcomes = new InMemoryIdempotencyStore();
+  const fallback = new WorkItemProcessor({ runner, queue, outcomes });
+
+  // ADR-030 wiring: load the declarative pipelines. Fail-safe by construction —
+  // no recipes (or a broken recipe) logs once inside loadPipelines and every
+  // item keeps the WorkItemProcessor -> orchestrator runner path above.
+  const recipesDir = resolvePipelinesDir(process.env.PIPELINES_CONFIG_PATH, defaultRecipesDir());
+  const pipelines = loadPipelines(recipesDir);
+
+  let processor: MessageProcessor = fallback;
+  if (pipelines.size > 0) {
+    // The Milestone 14 effect gateway is the pipeline's only commit path.
+    // Policies come from each recipe's commit block; the approval class is
+    // 'auto' because the gateway's own fail-closed invariants still govern
+    // (an irreversible draft, or an empty signing secret, refuses to commit
+    // and the item escalates rather than acting).
+    const effectTypes = new Map<string, EffectTypePolicy>(
+      [...pipelines.values()].map((pipeline) => [
+        pipeline.config.commit.effect_type,
+        makeEffectTypePolicy(pipeline.config.commit.effect_type, pipeline.config.commit.reversibility, 'auto'),
+      ])
+    );
+    const resolver = new PipelineVerificationResolver();
+    const gateway = new EffectGateway({
+      effectTypes,
+      signingSecret: config.signingSecret,
+      evidenceResolver: resolver,
+    });
+
+    const bridgeSecret = process.env.FORGE_BRIDGE_SECRET;
+    const escalate = buildEscalateEmitter({ intakeUrl: process.env.FORGE_INTAKE_URL, bridgeSecret });
+
+    const pipelineDeps: SharedPipelineDeps = {
+      goose,
+      store,
+      secret: config.signingSecret,
+      reconcile: ({ minionToken, correlationId, attempt, serverAlias, toolName, params }) =>
+        verifyAndExecuteTool({ minionToken, correlationId, attempt }, serverAlias, toolName, params),
+      commit: buildGatewayCommit(gateway, resolver),
+      pricePer1kTokensUsd: buildPricePer1kTokens(process.env.PIPELINE_PRICE_PER_1K_TOKENS_USD),
+      ...(escalate ? { escalate } : {}),
+      ...(bridgeSecret ? { bridgeSecret } : {}),
+    };
+
+    processor = new PipelineWorkItemProcessor({
+      pipelines,
+      deps: pipelineDeps,
+      fallback,
+      queue,
+      outcomes,
+    });
+  }
 
   const dailyBudget = buildDailyBudget(process.env.DAILY_BUDGET_MAX_COST_USD);
 
+  // The daily budget gates the consume loop itself, so it applies identically
+  // to pipeline-routed items and fallback items (ADR-031, unchanged).
   await consumeQueue({ queue, processor, store, ...(dailyBudget ? { dailyBudget } : {}) });
 }
 

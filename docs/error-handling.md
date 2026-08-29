@@ -497,8 +497,10 @@ with `on_failure: escalate`, an item exceeding its retry/cost/complexity
 thresholds does not simply dead-letter — the pipeline assembles a signed
 `escalation/v1` envelope (item + full attempt history + cause) and delivers
 it to the Forge (Flow) intake, closing the item only on Flow's signed
-resolution under the same correlation id. (Emitter is library-complete;
-production wiring pending — ADR-030/033.) Stuck-envelope reconciliation:
+resolution under the same correlation id. (Emitter wired in the production
+consumer; armed by `FORGE_INTAKE_URL` + `FORGE_BRIDGE_SECRET` — unarmed,
+escalating items dead-letter as `ESCALATION_UNARMED` — ADR-030/033.)
+Stuck-envelope reconciliation:
 `./runbooks/stream-operations.md` §4.
 
 ---

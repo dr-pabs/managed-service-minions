@@ -68,11 +68,13 @@ The shipped `refund_request` recipe is executed for real by:
 - `test/src/bridge-e2e.test.ts` — the `escalate` path round-tripped against a
   live Forge (Flow) intake.
 
-## Wiring status (honest note)
+## Wiring status
 
-`loadPipeline`/`runItemPipeline` are **library-complete but not yet wired
-into the production queue-ingress process**: `extensions/queue-ingress/src/index.ts`
-currently routes work items straight to `WorkItemProcessor` → orchestrator
-runner and wires only the daily budget. Until that production wiring lands,
-this directory is exercised by the tests above, not by the deployed consumer.
-See ADR-030's wiring note.
+`loadPipeline`/`runItemPipeline` are **wired into the production
+queue-ingress process**: `extensions/queue-ingress/src/index.ts` loads this
+directory at startup (`PIPELINES_CONFIG_PATH`, defaulting to the repo's
+`recipes/`) and routes each work item by `item_type` through its declarative
+pipeline, with unmatched types (or an absent/broken recipes file, logged
+once) falling back to the `WorkItemProcessor` → orchestrator runner path.
+See ADR-030's wiring note and
+`extensions/queue-ingress/__tests__/production-wiring.test.ts`.

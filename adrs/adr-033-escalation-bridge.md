@@ -22,7 +22,7 @@ Stream's item pipeline is bounded by design (ADR-030): when an item exceeds its 
 
 ## Wiring status (honest note)
 
-The emitter is library-complete and proven by the cross-repo bridge e2e, but the production queue-ingress process (`src/index.ts`) does not yet invoke the item pipeline that calls it — see ADR-030's wiring note. Deployments that bridge to Flow must set `FORGE_BRIDGE_SECRET` to the same value in both runtimes and point the emitter at Flow's intake URL.
+The emitter is wired in the production queue-ingress process: `src/index.ts` arms it (via `src/pipeline-processor.ts`'s `buildEscalateEmitter`) when BOTH `FORGE_INTAKE_URL` and `FORGE_BRIDGE_SECRET` are set, and pipeline escalations then travel the signed envelope round trip; unarmed, an escalating item dead-letters as `ESCALATION_UNARMED` (with a log, never a throw), and a bridged item whose verified resolution is `unresolved` dead-letters as `ESCALATION_UNRESOLVED`. Proven by the cross-repo bridge e2e and `extensions/queue-ingress/__tests__/production-wiring.test.ts`. Deployments that bridge to Flow must set `FORGE_BRIDGE_SECRET` to the same value in both runtimes and point the emitter at Flow's intake URL.
 
 ## Rejected alternatives
 

@@ -34,10 +34,10 @@
 | **Identity contract (`identity/v1`)** | ✅ Complete | ADR-029, `packages/framework-core/README.md`, forge-contracts vectors |
 | **Queue-first Stream ingress** | ✅ Complete | ADR-027, `extensions/queue-ingress/README.md`, `./runbooks/stream-operations.md` |
 | **Effect gateway (`effects/v1`)** | ✅ Complete | ADR-028, `extensions/mcp-toolshed/README.md` |
-| **Item pipelines (declarative)** | ✅ Designed + library-complete (production wiring pending) | ADR-030, `recipes/README.md` |
-| **Cost control (`budget/v1`)** | ✅ Complete (daily wired; per-item library-complete, wiring pending) | ADR-031 |
+| **Item pipelines (declarative)** | ✅ Complete (wired into the production consumer with per-`item_type` routing and fallback) | ADR-030, `recipes/README.md` |
+| **Cost control (`budget/v1`)** | ✅ Complete (daily and per-item caps both wired in the production consumer) | ADR-031 |
 | **Sampling QA circuit breaker** | ✅ Complete | ADR-032, `./dashboard-design.md` addendum |
-| **Escalation bridge (`escalation/v1`)** | ✅ Complete (emitter library-complete, wiring pending) | ADR-033, `./runbooks/stream-operations.md` |
+| **Escalation bridge (`escalation/v1`)** | ✅ Complete (emitter wired in the production consumer, armed by `FORGE_INTAKE_URL` + `FORGE_BRIDGE_SECRET`) | ADR-033, `./runbooks/stream-operations.md` |
 
 ---
 
