@@ -87,7 +87,21 @@ function toTokenInput(payload: IdentityVectorPayload): MinionTokenClaims {
 const describeVectors = vectorsFileExists ? describe : describe.skip;
 
 describeVectors('identity/v1 contract vectors (forge-contracts)', () => {
-  const { accept, reject } = loadVectors();
+  // `describe.skip` still executes this callback at collection time, so the
+  // vectors must not be read (and `.each` must not see an empty table) when
+  // the file is absent — substitute a placeholder vector that never runs.
+  const placeholder: IdentityVector = {
+    id: 'placeholder (vectors file not found)',
+    kind: 'accept',
+    secret: '',
+    payload: { agent_id: '', scope_id: '', correlation_id: '', exp: 0 },
+    token: '',
+    now_ms: 0,
+    reject_reason: 'placeholder',
+  };
+  const { accept, reject } = vectorsFileExists
+    ? loadVectors()
+    : { accept: [placeholder], reject: [placeholder] };
 
   afterEach(() => {
     jest.useRealTimers();
