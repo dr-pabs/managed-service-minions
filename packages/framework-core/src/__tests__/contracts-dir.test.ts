@@ -9,8 +9,13 @@ describe('resolveContractsDir', () => {
     expect(resolveContractsDir({ env: { FORGE_CONTRACTS_DIR: '/opt/contracts' } })).toBe('/opt/contracts');
   });
 
-  it('a blank env value falls through to the sibling search', () => {
-    expect(resolveContractsDir({ env: { FORGE_CONTRACTS_DIR: '  ' } })).toBeDefined();
+  it('a blank env value falls through (does not override discovery)', () => {
+    const root = join(tmpdir(), `contracts-dir-blank-${process.pid}-${Date.now()}`);
+    const workspace = join(root, 'ws');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, 'pnpm-workspace.yaml'), 'packages: []\n');
+
+    expect(resolveContractsDir({ env: { FORGE_CONTRACTS_DIR: '  ' }, startDir: workspace, legacyPaths: [] })).toBeUndefined();
   });
 
   it('finds a sibling checkout next to the pnpm workspace root', () => {
