@@ -1,5 +1,5 @@
 import type { TableClient, TableEntity } from '@azure/data-tables';
-import type { PendingApproval, SessionStore } from 'framework-core';
+import type { SessionStore } from 'framework-core';
 import type { RateLimitConfig, RateLimitResult } from './rate-limiter.js';
 import type { CircuitBreakerConfig } from './circuit-breaker.js';
 import type { GovernanceStateStore } from './governance-state.js';
